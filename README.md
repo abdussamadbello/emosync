@@ -4,6 +4,7 @@ Privacy-first, hybrid AI coach for navigating grief and heartbreak (see project 
 
 ## Docs
 
+- **[docs/PROJECT.md](docs/PROJECT.md)** — project overview, architecture, tech stack, team roles, and API reference.
 - **[execution.md](execution.md)** — milestones, roles, interfaces, Backend & DevOps checklist.
 
 ## Quick start (local API + Postgres)

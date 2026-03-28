@@ -12,6 +12,15 @@ class Settings(BaseSettings):
     # When set, chat routes require Authorization: Bearer <api_key> or X-API-Key. Health stays public.
     api_key: str | None = None
 
+    # Gemini API key for the LangGraph agent pipeline.
+    # When unset, chat falls back to a deterministic stub (safe for CI / local dev).
+    gemini_api_key: str | None = None
+
+    # JWT auth
+    jwt_secret: str = "change-me-in-production"
+    jwt_algorithm: str = "HS256"
+    jwt_expire_minutes: int = 60 * 24  # 24 hours
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
