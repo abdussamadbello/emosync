@@ -44,6 +44,7 @@ async def test_create_conversation_and_stream_persists_messages(
     assert messages[0]["role"] == "user"
     assert messages[0]["content"] == "Hello from the test suite"
     assert messages[1]["role"] == "assistant"
+    # Without GEMINI_API_KEY the stub is used
     assert "[stub assistant]" in messages[1]["content"]
 
 

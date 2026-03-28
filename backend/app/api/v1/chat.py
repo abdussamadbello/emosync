@@ -90,6 +90,17 @@ async def stream_message_turn(
     cid_str = str(conversation_id)
     content = body.content
 
+    # Load conversation history for agent context
+    history_result = await db.execute(
+        select(Message)
+        .where(Message.conversation_id == conversation_id)
+        .order_by(Message.created_at.asc())
+    )
+    history = [
+        {"role": m.role, "content": m.content}
+        for m in history_result.scalars().all()
+    ]
+
     async def event_stream() -> AsyncIterator[str]:
         yield _sse(
             "meta", {"conversation_id": cid_str, "user_message_id": user_message_id}
@@ -100,6 +111,7 @@ async def stream_message_turn(
                 user_message=content,
                 conversation_id=cid_str,
                 user_message_id=user_message_id,
+                conversation_history=history,
             ):
                 chunks.append(fragment)
                 yield _sse("token", {"text": fragment})
