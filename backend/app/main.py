@@ -7,6 +7,7 @@ from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.v1.router import api_router
 from app.core.config import settings
@@ -48,6 +49,29 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
             "code": "validation_error",
             "message": "Request validation failed",
             "details": exc.errors(),
+            "request_id": rid,
+        },
+    )
+
+
+def _http_error_code(status_code: int) -> str:
+    return {
+        status.HTTP_401_UNAUTHORIZED: "unauthorized",
+        status.HTTP_403_FORBIDDEN: "forbidden",
+        status.HTTP_404_NOT_FOUND: "not_found",
+    }.get(status_code, "http_error")
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+    rid = getattr(request.state, "request_id", None)
+    detail = exc.detail
+    message = detail if isinstance(detail, str) else str(detail)
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "code": _http_error_code(exc.status_code),
+            "message": message,
             "request_id": rid,
         },
     )

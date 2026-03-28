@@ -121,8 +121,14 @@ docker-compose.yml
 
 ## 7. Current scaffold (this repo)
 
-- **M1 started:** `backend/` FastAPI app, Alembic + pgvector, `docker-compose.yml`, CI workflow.
-- Local run: see [README.md](README.md).
+| Milestone | Status |
+|-----------|--------|
+| **M1** — Runnable backend + DB | **Done:** Compose + pgvector migration (`users`, `conversations`, `messages`, `embedding_chunks`), `/health`, `/ready`, CI. |
+| **M2** — API gateway for chat | **Done (stub):** `POST/GET` conversations + messages, SSE stream for assistant tokens, optional `API_KEY` auth on chat routes, stable JSON error shape. |
+| **M3** — Agent boundary | **Hook in place:** `backend/app/services/chat_turn.py` → `run_turn(...)`; Lead Agent replaces stub with LangGraph streaming. |
+| **CD** | **Partial:** GHCR publish on default branch; wire your host (Railway, Fly, Render, AWS, …) to pull `ghcr.io/<owner>/emosync-api` or trigger deploy. Staging URL + env still belong in your platform + GitHub Environments. |
+
+Local run and HTTP details: [README.md](README.md).
 
 ---
 
