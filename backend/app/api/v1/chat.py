@@ -9,10 +9,11 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import require_api_key
+from app.api.deps import get_current_user
 from app.core.database import SessionLocal, get_db
 from app.models.conversation import Conversation
 from app.models.message import Message
+from app.models.user import User
 from app.schemas.chat import (
     ConversationCreate,
     ConversationOut,
@@ -23,7 +24,7 @@ from app.services.chat_turn import run_turn
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(tags=["chat"], dependencies=[Depends(require_api_key)])
+router = APIRouter(tags=["chat"])
 
 
 def _sse(event: str, payload: dict) -> str:
@@ -37,13 +38,27 @@ def _sse(event: str, payload: dict) -> str:
 )
 async def create_conversation(
     body: ConversationCreate,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> Conversation:
-    conv = Conversation(title=body.title, user_id=body.user_id)
+    conv = Conversation(title=body.title, user_id=current_user.id)
     db.add(conv)
     await db.commit()
     await db.refresh(conv)
     return conv
+
+
+@router.get("/conversations", response_model=list[ConversationOut])
+async def list_conversations(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[Conversation]:
+    result = await db.execute(
+        select(Conversation)
+        .where(Conversation.user_id == current_user.id)
+        .order_by(Conversation.updated_at.desc())
+    )
+    return list(result.scalars().all())
 
 
 @router.get(
@@ -51,10 +66,11 @@ async def create_conversation(
 )
 async def list_messages(
     conversation_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[Message]:
     conv = await db.get(Conversation, conversation_id)
-    if conv is None:
+    if conv is None or conv.user_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found"
         )
@@ -71,10 +87,11 @@ async def list_messages(
 async def stream_message_turn(
     conversation_id: uuid.UUID,
     body: StreamTurnRequest,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> StreamingResponse:
     conv = await db.get(Conversation, conversation_id)
-    if conv is None:
+    if conv is None or conv.user_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found"
         )

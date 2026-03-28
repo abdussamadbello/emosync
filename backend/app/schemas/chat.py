@@ -8,12 +8,13 @@ from pydantic import BaseModel, Field
 
 class ConversationCreate(BaseModel):
     title: str | None = Field(default=None, max_length=512)
-    user_id: uuid.UUID | None = None
 
 
 class ConversationOut(BaseModel):
     id: uuid.UUID
+    title: str | None
     created_at: datetime
+    updated_at: datetime
 
     model_config = {"from_attributes": True}
 
