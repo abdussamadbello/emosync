@@ -27,17 +27,32 @@ Privacy-first, hybrid AI coach for navigating grief and heartbreak (see project 
    - [http://localhost:8000/api/v1/ready](http://localhost:8000/api/v1/ready) (includes DB check)
    - OpenAPI: [http://localhost:8000/docs](http://localhost:8000/docs)
 
-## API contract (M2 — stable for Frontend / Agent)
+## API contract (M2+M3 — stable for Frontend / Agent)
 
 All routes are under `/api/v1`. JSON errors use `{ "code", "message", "request_id" }` (validation responses also include `details`).
 
+### Auth routes
+
 | Method | Path | Purpose |
 |--------|------|---------|
-| `POST` | `/conversations` | Create a conversation; returns `{ id, created_at }`. Optional body: `{ "title"?, "user_id"? }`. |
+| `POST` | `/auth/register` | Create account (`email`, `password`, `display_name?`) → JWT `TokenResponse`. |
+| `POST` | `/auth/login` | Authenticate (`email`, `password`) → JWT `TokenResponse`. |
+| `GET` | `/auth/me` | Return current user profile (requires JWT bearer token). |
+
+### Chat routes
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `POST` | `/conversations` | Create a conversation; returns `{ id, created_at }`. Optional body: `{ "title"? }`. |
+| `GET` | `/conversations` | List the current user's conversations (ordered by `updated_at` DESC). |
 | `GET` | `/conversations/{id}/messages` | List messages in order (user/assistant turns). |
 | `POST` | `/conversations/{id}/messages/stream` | Send user text; response is **SSE** (`text/event-stream`). |
 
-**Auth (placeholder):** If `API_KEY` is set in the environment, chat routes require `Authorization: Bearer <API_KEY>` or `X-API-Key: <API_KEY>`. Health and readiness stay unauthenticated for probes. With no `API_KEY`, chat routes are open (local dev only).
+**Auth:** Two layers are available and can be used independently:
+
+- **JWT (user auth):** Register or log in via `/auth/register` and `/auth/login` to receive a JWT. Pass it as `Authorization: Bearer <token>`. The `/auth/me` endpoint and chat routes use this to identify the current user.
+- **API key (service auth):** If `API_KEY` is set in the environment, chat routes also accept `Authorization: Bearer <API_KEY>` or `X-API-Key: <API_KEY>`.
+- Health and readiness endpoints stay unauthenticated for probes.
 
 **SSE events** (each event has a JSON `data` payload):
 
@@ -48,7 +63,7 @@ All routes are under `/api/v1`. JSON errors use `{ "code", "message", "request_i
 
 **Frontend streaming:** use `fetch()` with the request body and read the response body as a stream (EventSource only supports GET). Disable proxy buffering for SSE in production (see `X-Accel-Buffering: no` header on the response).
 
-**Agent integration:** replace the stub in `backend/app/services/chat_turn.py` (`run_turn`) with LangGraph; the HTTP layer should keep calling `run_turn` only.
+**Agent integration:** The LangGraph grief-coach pipeline (Historian → Specialist → Anchor) is wired behind `backend/app/services/chat_turn.py` (`run_turn`). Set `GEMINI_API_KEY` to activate it; without the key, chat returns a deterministic stub (safe for CI and local dev).
 
 ## CI/CD
 
@@ -57,9 +72,22 @@ All routes are under `/api/v1`. JSON errors use `{ "code", "message", "request_i
 
 **Migrations:** the API image runs `alembic upgrade head` before `uvicorn` (see `backend/Dockerfile`). For one-off jobs, run the same against `DATABASE_URL_SYNC`.
 
+## Environment variables
+
+See `.env.example` for the full list. Key variables:
+
+| Variable | Required | Purpose |
+|----------|----------|---------|
+| `DATABASE_URL` | Yes | Async SQLAlchemy connection string (`postgresql+asyncpg://…`) |
+| `DATABASE_URL_SYNC` | Yes | Sync connection string for Alembic (`postgresql://…`) |
+| `CORS_ORIGINS` | No | Comma-separated allowed origins (default `http://localhost:3000`) |
+| `API_KEY` | No | If set, chat routes require this as a bearer/header token |
+| `JWT_SECRET` | No | Secret for signing JWT tokens (change in production) |
+| `GEMINI_API_KEY` | No | Enables the LangGraph agent pipeline; without it, chat uses a stub |
+
 ## Backend development (without Docker for the app)
 
-**Python 3.11+ is required** (same as `backend/Dockerfile` and CI). macOS’s default `python3` is often **3.9**; SQLAlchemy then fails resolving types like `uuid.UUID | None` (`unsupported operand type(s) for '|'` / `MappedAnnotationError`). Use 3.11 via [uv](https://docs.astral.sh/uv/) (recommended) or another install.
+**Python 3.11+ is required** (same as `backend/Dockerfile` and CI). macOS’s default `python3` is often **3.9**; SQLAlchemy then fails resolving types like `uuid.UUID | None` (`unsupported operand type(s) for ‘|’` / `MappedAnnotationError`). Use 3.11 via [uv](https://docs.astral.sh/uv/) (recommended) or another install.
 
 With Postgres running via Compose (`docker compose up db`):
 

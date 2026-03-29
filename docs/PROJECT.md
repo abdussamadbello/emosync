@@ -86,15 +86,16 @@ User Input (Voice or Text)
 
 | Component | Status | Notes |
 |-----------|--------|-------|
-| FastAPI backend scaffold | Done | CORS, auth, error handling, request IDs |
+| FastAPI backend scaffold | Done | CORS, middleware, error handling, request IDs |
 | PostgreSQL + pgvector schema | Done | Users, conversations, messages, embedding_chunks |
+| User authentication (JWT) | Done | Register, login, `/auth/me`; bcrypt + JWT |
 | REST/SSE chat API | Done | `/api/v1/conversations`, streaming with SSE |
 | Docker Compose stack | Done | Postgres + API, one-command startup |
 | CI/CD pipelines | Done | Lint, test, build, publish to GHCR |
-| Agent integration boundary | Done | `run_turn()` stub ready for LangGraph |
-| LangGraph orchestration | Pending | Historian / Specialist / Anchor nodes |
+| LangGraph orchestration | Done | Historian → Specialist → Anchor pipeline; activated by `GEMINI_API_KEY` |
+| Agent integration boundary | Done | `run_turn()` wired to LangGraph graph; stub fallback without API key |
 | Voice pipeline (STT/TTS) | Pending | Whisper + ElevenLabs integration |
-| MCP servers | Pending | Calendar + Journal tool contracts |
+| MCP servers | Pending | Calendar + Journal servers (Historian has stub calls) |
 | Next.js frontend | Pending | Voice Orb UI, Chat Sidebar |
 | Cloud deployment | Pending | RDS, ECR, secrets, observability |
 
@@ -116,11 +117,27 @@ User Input (Voice or Text)
 
 Base path: `/api/v1`
 
+### Auth
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `POST` | `/auth/register` | Create account (email, password, display_name?) → JWT token |
+| `POST` | `/auth/login` | Authenticate (email, password) → JWT token |
+| `GET` | `/auth/me` | Current user profile (requires JWT bearer) |
+
+### Chat
+
 | Method | Path | Purpose |
 |--------|------|---------|
 | `POST` | `/conversations` | Create a conversation |
+| `GET` | `/conversations` | List user's conversations |
 | `GET` | `/conversations/{id}/messages` | List messages in order |
 | `POST` | `/conversations/{id}/messages/stream` | Send message, receive SSE stream |
+
+### Infrastructure
+
+| Method | Path | Purpose |
+|--------|------|---------|
 | `GET` | `/health` | Health check |
 | `GET` | `/ready` | Readiness probe (includes DB check) |
 
@@ -135,7 +152,12 @@ event: error   → { "code", "message" }            (on failure)
 
 ### Auth
 
-When `API_KEY` env var is set, chat routes require `Authorization: Bearer <key>` or `X-API-Key: <key>`. Health/ready endpoints are always open.
+Two auth mechanisms are available:
+
+- **JWT (user auth):** Register via `/auth/register` or log in via `/auth/login` to get a JWT. Pass as `Authorization: Bearer <token>`.
+- **API key (service auth):** If `API_KEY` env var is set, chat routes also accept `Authorization: Bearer <key>` or `X-API-Key: <key>`.
+
+Health/ready endpoints are always open.
 
 ---
 
@@ -144,6 +166,9 @@ When `API_KEY` env var is set, chat routes require `Authorization: Bearer <key>`
 ```
 users
 ├── id (UUID, PK)
+├── email (varchar 320, unique, indexed)
+├── password_hash (varchar 128)
+├── display_name (varchar 256, nullable)
 └── created_at (timestamptz)
 
 conversations
@@ -233,11 +258,16 @@ emosync/
 ├── backend/
 │   ├── app/
 │   │   ├── main.py             # FastAPI application entry
-│   │   ├── api/v1/             # Route handlers (health, chat)
-│   │   ├── core/               # Config, database engine
+│   │   ├── api/v1/             # Route handlers (health, auth, chat)
+│   │   ├── core/               # Config, database engine, security (JWT/bcrypt)
 │   │   ├── models/             # SQLAlchemy ORM models
 │   │   ├── schemas/            # Pydantic request/response models
-│   │   └── services/           # Business logic (chat_turn.py → LangGraph hook)
+│   │   ├── services/           # Business logic (chat_turn.py → LangGraph)
+│   │   └── agent/              # LangGraph grief-coach pipeline
+│   │       ├── graph.py        # Historian → Specialist → Anchor graph
+│   │       ├── state.py        # AgentState TypedDict
+│   │       ├── prompts.py      # System prompts per node
+│   │       └── nodes/          # Individual agent node implementations
 │   ├── alembic/                # Database migrations
 │   ├── tests/                  # pytest test suite
 │   ├── Dockerfile              # Multi-stage Python 3.11 image
@@ -251,8 +281,8 @@ emosync/
 
 ## Key Integration Points
 
-**For Frontend devs:** The chat API is stable. Use `fetch()` with POST body for SSE streaming. CORS is configured for `localhost:3000`.
+**For Frontend devs:** The chat API is stable. Use `fetch()` with POST body for SSE streaming. CORS is configured for `localhost:3000`. Auth flow: call `/auth/register` or `/auth/login`, store the JWT, pass it as `Authorization: Bearer <token>` on subsequent requests.
 
-**For Agent engineers:** Replace the stub in `backend/app/services/chat_turn.py` (`run_turn` function). The HTTP/SSE layer stays unchanged.
+**For Agent engineers:** The LangGraph pipeline (Historian → Specialist → Anchor) is wired behind `run_turn()` in `backend/app/services/chat_turn.py`. Set `GEMINI_API_KEY` to activate it. To modify agent behavior, edit prompts in `backend/app/agent/prompts.py` or node logic in `backend/app/agent/nodes/`.
 
-**For MCP engineers:** The `embedding_chunks` table with pgvector is ready for semantic search. Wire MCP tool outputs into the `extra_metadata` JSON column.
+**For MCP engineers:** The `embedding_chunks` table with pgvector is ready for semantic search. The Historian node (`backend/app/agent/nodes/historian.py`) has stub MCP calls — replace these with real Calendar + Journal server integrations. Wire MCP tool outputs into the `extra_metadata` JSON column.
