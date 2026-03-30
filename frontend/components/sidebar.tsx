@@ -20,6 +20,8 @@ interface SidebarProps {
   on_toggle: () => void;
   /** Whether a user is currently logged in */
   is_logged_in?: boolean;
+  /** Called when the user clicks "New Chat" */
+  on_new_chat?: () => void;
 }
 
 const MOCK_CHATS = [
@@ -31,7 +33,7 @@ const MOCK_CHATS = [
 /**
  * Collapsible sidebar with navigation links for chat management.
  */
-export function Sidebar({ open, on_toggle, is_logged_in = false }: SidebarProps) {
+export function Sidebar({ open, on_toggle, is_logged_in = false, on_new_chat }: SidebarProps) {
   return (
     <aside
       className={`relative flex h-full flex-col border-r border-border bg-sidebar transition-all duration-300 ease-in-out ${
@@ -71,12 +73,10 @@ export function Sidebar({ open, on_toggle, is_logged_in = false }: SidebarProps)
         <Button
           variant="ghost"
           className={`w-full justify-start gap-3 ${open ? "px-3" : "px-0 justify-center"}`}
-          asChild
+          onClick={on_new_chat}
         >
-          <Link href="/">
-            <Plus className="size-4 shrink-0" />
-            {open && <span className="truncate">New Chat</span>}
-          </Link>
+          <Plus className="size-4 shrink-0" />
+          {open && <span className="truncate">New Chat</span>}
         </Button>
 
         {/* Search */}

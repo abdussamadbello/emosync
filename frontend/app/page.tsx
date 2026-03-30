@@ -9,7 +9,8 @@ import { useTheme } from "next-themes";
 import { use_audio_recorder } from "@/hooks/use-audio-recorder";
 import { mock_speech_to_text, mock_text_to_speech } from "@/lib/mock-audio-service";
 import { Sidebar } from "@/components/sidebar";
-import { get_token, get_display_name, clear_auth } from "@/lib/api";
+import { get_token, get_display_name, clear_auth, create_conversation, stream_message } from "@/lib/api";
+import { read_sse_stream } from "@/lib/sse";
 
 interface ChatMessage {
   role: "user" | "assistant";
@@ -32,6 +33,8 @@ export default function Home() {
   const [isTyping, setIsTyping] = useState(false);
   const [sidebar_open, setSidebarOpen] = useState(true);
   const [display_name, setDisplayName] = useState<string | null>(null);
+  const [conversation_id, setConversationId] = useState<string | null>(null);
+  const [chat_error, setChatError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const responseIndexRef = useRef(0);
   const { theme, setTheme } = useTheme();
@@ -41,10 +44,25 @@ export default function Home() {
 
   useEffect(() => {
     setMounted(true);
-    if (get_token()) {
+    const token = get_token();
+    if (token) {
       setDisplayName(get_display_name());
+      initialize_conversation(token);
     }
   }, []);
+
+  /**
+   * Creates a fresh conversation on the backend and stores its id in state.
+   * Called once on mount when the user is logged in, and again for New Chat.
+   */
+  async function initialize_conversation(token: string) {
+    try {
+      const conv = await create_conversation(token);
+      setConversationId(conv.id);
+    } catch {
+      setChatError("Could not start a conversation. Please refresh.");
+    }
+  }
 
   /**
    * Clears auth data from localStorage and resets UI to logged-out state.
@@ -52,6 +70,8 @@ export default function Home() {
   function handle_logout() {
     clear_auth();
     setDisplayName(null);
+    setConversationId(null);
+    setMessages([]);
     router.push("/auth/login");
   }
 
@@ -59,24 +79,72 @@ export default function Home() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isTyping]);
 
-  function handle_send() {
+  /**
+   * Sends the user's message to the backend and streams the assistant's
+   * response word-by-word via SSE, appending tokens to the UI in real time.
+   * Falls back to the demo responses when the user is not logged in.
+   */
+  async function handle_send() {
     const trimmed = input.trim();
     if (!trimmed || isTyping) return;
 
+    setChatError(null);
     setMessages((prev) => [...prev, { role: "user", content: trimmed }]);
     setInput("");
     setIsTyping(true);
 
-    setTimeout(() => {
-      const response =
-        DEMO_RESPONSES[responseIndexRef.current % DEMO_RESPONSES.length];
-      responseIndexRef.current += 1;
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", content: response },
-      ]);
+    const token = get_token();
+
+    // Guest / unauthenticated: use demo responses
+    if (!token || !conversation_id) {
+      setTimeout(() => {
+        const response =
+          DEMO_RESPONSES[responseIndexRef.current % DEMO_RESPONSES.length];
+        responseIndexRef.current += 1;
+        setMessages((prev) => [
+          ...prev,
+          { role: "assistant", content: response },
+        ]);
+        setIsTyping(false);
+      }, 1200);
+      return;
+    }
+
+    // Authenticated: stream from backend
+    // Add an empty assistant bubble that we'll fill token-by-token
+    setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
+
+    try {
+      const response = await stream_message(token, conversation_id, trimmed);
+
+      for await (const evt of read_sse_stream(response)) {
+        if (evt.event === "token") {
+          const fragment = (evt.data.text as string) ?? "";
+          setMessages((prev) => {
+            const updated = [...prev];
+            const last = updated[updated.length - 1];
+            if (last?.role === "assistant") {
+              updated[updated.length - 1] = {
+                ...last,
+                content: last.content + fragment,
+              };
+            }
+            return updated;
+          });
+        } else if (evt.event === "done") {
+          setIsTyping(false);
+        } else if (evt.event === "error") {
+          const msg = (evt.data.message as string) ?? "Assistant error";
+          setChatError(msg);
+          setIsTyping(false);
+        }
+      }
+    } catch (err: unknown) {
+      const msg =
+        err instanceof Error ? err.message : "Failed to reach the server.";
+      setChatError(msg);
       setIsTyping(false);
-    }, 1200);
+    }
   }
 
   function handle_key_down(e: React.KeyboardEvent<HTMLInputElement>) {
@@ -138,6 +206,13 @@ export default function Home() {
         open={sidebar_open}
         on_toggle={() => setSidebarOpen((v) => !v)}
         is_logged_in={!!display_name}
+        on_new_chat={() => {
+          if (messages.length === 0) return;
+          const token = get_token();
+          setMessages([]);
+          setChatError(null);
+          if (token) initialize_conversation(token);
+        }}
       />
 
       {/* Main area */}
@@ -266,6 +341,11 @@ export default function Home() {
 
             {/* Input bar */}
             <div className="border-t border-border bg-background px-3 pt-3 pb-1">
+              {chat_error && (
+                <p className="mb-2 rounded-lg bg-destructive/10 px-3 py-2 text-center text-xs text-destructive">
+                  {chat_error}
+                </p>
+              )}
               <p className="mb-2 text-center text-[11px] text-muted-foreground/70">
                 EmoSync can make mistakes. Always seek professional help for serious mental health concerns.
               </p>

@@ -136,3 +136,78 @@ export function clear_auth(): void {
   localStorage.removeItem("emosync_token");
   localStorage.removeItem("emosync_display_name");
 }
+
+// ---------------------------------------------------------------------------
+// Chat API
+// ---------------------------------------------------------------------------
+
+/** Shape of a conversation returned by the backend */
+export interface ConversationOut {
+  id: string;
+  title: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Shape of a message returned by the backend */
+export interface MessageOut {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  created_at: string;
+}
+
+/**
+ * Creates a new conversation for the authenticated user.
+ * Returns the conversation including its id.
+ */
+export async function create_conversation(
+  token: string,
+  title?: string
+): Promise<ConversationOut> {
+  const res = await fetch(`${API_BASE}/api/v1/conversations`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ title: title ?? null }),
+  });
+
+  if (!res.ok) {
+    const body: ApiError = await res.json().catch(() => ({}));
+    throw new Error(body.detail ?? `Failed to create conversation (${res.status})`);
+  }
+
+  return res.json() as Promise<ConversationOut>;
+}
+
+/**
+ * Opens an SSE stream for a chat turn.
+ * Returns the raw Response so the caller can read the body as a stream.
+ * Throws if the request itself fails (non-2xx before the stream starts).
+ */
+export async function stream_message(
+  token: string,
+  conversation_id: string,
+  content: string
+): Promise<Response> {
+  const res = await fetch(
+    `${API_BASE}/api/v1/conversations/${conversation_id}/messages/stream`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ content }),
+    }
+  );
+
+  if (!res.ok) {
+    const body: ApiError = await res.json().catch(() => ({}));
+    throw new Error(body.detail ?? `Stream request failed (${res.status})`);
+  }
+
+  return res;
+}
