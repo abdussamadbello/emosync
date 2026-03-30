@@ -183,6 +183,44 @@ export async function create_conversation(
 }
 
 /**
+ * Fetches all conversations for the authenticated user, newest first.
+ */
+export async function list_conversations(
+  token: string
+): Promise<ConversationOut[]> {
+  const res = await fetch(`${API_BASE}/api/v1/conversations`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  if (!res.ok) {
+    const body: ApiError = await res.json().catch(() => ({}));
+    throw new Error(body.detail ?? `Failed to fetch conversations (${res.status})`);
+  }
+
+  return res.json() as Promise<ConversationOut[]>;
+}
+
+/**
+ * Fetches all messages for a given conversation, oldest first.
+ */
+export async function list_messages(
+  token: string,
+  conversation_id: string
+): Promise<MessageOut[]> {
+  const res = await fetch(
+    `${API_BASE}/api/v1/conversations/${conversation_id}/messages`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+
+  if (!res.ok) {
+    const body: ApiError = await res.json().catch(() => ({}));
+    throw new Error(body.detail ?? `Failed to fetch messages (${res.status})`);
+  }
+
+  return res.json() as Promise<MessageOut[]>;
+}
+
+/**
  * Opens an SSE stream for a chat turn.
  * Returns the raw Response so the caller can read the body as a stream.
  * Throws if the request itself fails (non-2xx before the stream starts).

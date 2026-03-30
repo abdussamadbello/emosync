@@ -9,7 +9,12 @@ import { useTheme } from "next-themes";
 import { use_audio_recorder } from "@/hooks/use-audio-recorder";
 import { mock_speech_to_text, mock_text_to_speech } from "@/lib/mock-audio-service";
 import { Sidebar } from "@/components/sidebar";
-import { get_token, get_display_name, clear_auth, create_conversation, stream_message } from "@/lib/api";
+import {
+  get_token, get_display_name, clear_auth,
+  create_conversation, stream_message,
+  list_conversations, list_messages,
+  type ConversationOut,
+} from "@/lib/api";
 import { read_sse_stream } from "@/lib/sse";
 
 interface ChatMessage {
@@ -34,6 +39,7 @@ export default function Home() {
   const [sidebar_open, setSidebarOpen] = useState(true);
   const [display_name, setDisplayName] = useState<string | null>(null);
   const [conversation_id, setConversationId] = useState<string | null>(null);
+  const [conversations, setConversations] = useState<ConversationOut[]>([]);
   const [chat_error, setChatError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const responseIndexRef = useRef(0);
@@ -47,20 +53,55 @@ export default function Home() {
     const token = get_token();
     if (token) {
       setDisplayName(get_display_name());
+      load_conversations(token);
       initialize_conversation(token);
     }
   }, []);
 
   /**
+   * Fetches all conversations for the current user and updates sidebar state.
+   */
+  async function load_conversations(token: string) {
+    try {
+      const data = await list_conversations(token);
+      setConversations(data);
+    } catch {
+      // Non-critical — sidebar list just stays empty
+    }
+  }
+
+  /**
    * Creates a fresh conversation on the backend and stores its id in state.
-   * Called once on mount when the user is logged in, and again for New Chat.
+   * Refreshes the conversation list so the sidebar updates immediately.
    */
   async function initialize_conversation(token: string) {
     try {
       const conv = await create_conversation(token);
       setConversationId(conv.id);
+      // Refresh sidebar list so the new conversation appears
+      load_conversations(token);
     } catch {
       setChatError("Could not start a conversation. Please refresh.");
+    }
+  }
+
+  /**
+   * Loads a past conversation: sets it as active and fetches its message history.
+   */
+  async function select_conversation(id: string) {
+    const token = get_token();
+    if (!token) return;
+
+    setChatError(null);
+    setConversationId(id);
+
+    try {
+      const history = await list_messages(token, id);
+      setMessages(
+        history.map((m) => ({ role: m.role as "user" | "assistant", content: m.content }))
+      );
+    } catch {
+      setChatError("Could not load conversation history.");
     }
   }
 
@@ -206,6 +247,9 @@ export default function Home() {
         open={sidebar_open}
         on_toggle={() => setSidebarOpen((v) => !v)}
         is_logged_in={!!display_name}
+        conversations={conversations}
+        active_conversation_id={conversation_id}
+        on_select_conversation={select_conversation}
         on_new_chat={() => {
           if (messages.length === 0) return;
           const token = get_token();

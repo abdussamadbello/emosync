@@ -12,6 +12,7 @@ import {
   HelpCircle,
   CreditCard,
 } from "lucide-react";
+import type { ConversationOut } from "@/lib/api";
 
 interface SidebarProps {
   /** Whether the sidebar is expanded */
@@ -22,18 +23,34 @@ interface SidebarProps {
   is_logged_in?: boolean;
   /** Called when the user clicks "New Chat" */
   on_new_chat?: () => void;
+  /** List of conversations to display under "Your Chats" */
+  conversations?: ConversationOut[];
+  /** Id of the currently active conversation (highlighted) */
+  active_conversation_id?: string | null;
+  /** Called with the conversation id when the user selects a past chat */
+  on_select_conversation?: (id: string) => void;
 }
 
-const MOCK_CHATS = [
-  { id: "1", title: "Feeling overwhelmed at work" },
-  { id: "2", title: "Dealing with anxiety" },
-  { id: "3", title: "Processing grief" },
-];
+/**
+ * Returns a short display label for a conversation.
+ * Uses title if set, otherwise falls back to the first 8 chars of the id.
+ */
+function conversation_label(conv: ConversationOut): string {
+  return conv.title?.trim() || conv.id.slice(0, 8);
+}
 
 /**
- * Collapsible sidebar with navigation links for chat management.
+ * Collapsible sidebar with navigation links and real conversation list.
  */
-export function Sidebar({ open, on_toggle, is_logged_in = false, on_new_chat }: SidebarProps) {
+export function Sidebar({
+  open,
+  on_toggle,
+  is_logged_in = false,
+  on_new_chat,
+  conversations = [],
+  active_conversation_id,
+  on_select_conversation,
+}: SidebarProps) {
   return (
     <aside
       className={`relative flex h-full flex-col border-r border-border bg-sidebar transition-all duration-300 ease-in-out ${
@@ -91,26 +108,31 @@ export function Sidebar({ open, on_toggle, is_logged_in = false, on_new_chat }: 
           </Link>
         </Button>
 
-        {/* Past chats — only when logged in, expanded */}
+        {/* Past chats — expanded, logged in */}
         {is_logged_in && open && (
           <div className="mt-4">
             <p className="mb-1 px-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">
               Your Chats
             </p>
             <div className="flex flex-col gap-0.5">
-              {MOCK_CHATS.map((chat) => (
-                <Button
-                  key={chat.id}
-                  variant="ghost"
-                  className="w-full justify-start gap-3 px-3 text-sm"
-                  asChild
-                >
-                  <Link href={`/chat/${chat.id}`}>
-                    <MessageSquare className="size-4 shrink-0 text-muted-foreground" />
-                    <span className="truncate">{chat.title}</span>
-                  </Link>
-                </Button>
-              ))}
+              {conversations.length === 0 ? (
+                <p className="px-3 text-xs text-muted-foreground">No chats yet</p>
+              ) : (
+                conversations.map((conv) => {
+                  const is_active = conv.id === active_conversation_id;
+                  return (
+                    <Button
+                      key={conv.id}
+                      variant={is_active ? "secondary" : "ghost"}
+                      className="w-full justify-start gap-3 px-3 text-sm"
+                      onClick={() => on_select_conversation?.(conv.id)}
+                    >
+                      <MessageSquare className="size-4 shrink-0 text-muted-foreground" />
+                      <span className="truncate">{conversation_label(conv)}</span>
+                    </Button>
+                  );
+                })
+              )}
             </div>
           </div>
         )}
@@ -121,11 +143,8 @@ export function Sidebar({ open, on_toggle, is_logged_in = false, on_new_chat }: 
             variant="ghost"
             className="w-full justify-center px-0"
             title="Your Chats"
-            asChild
           >
-            <Link href="/chats">
-              <MessageSquare className="size-4 shrink-0" />
-            </Link>
+            <MessageSquare className="size-4 shrink-0" />
           </Button>
         )}
       </nav>
