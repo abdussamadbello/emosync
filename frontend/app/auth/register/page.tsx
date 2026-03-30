@@ -6,7 +6,14 @@ import Link from "next/link";
 import Image from "next/image";
 import { Button } from "@/components/ui/button";
 import { Eye, EyeOff, Sparkles, Check, X } from "lucide-react";
-import { register_user, save_token } from "@/lib/api";
+import {
+  register_user,
+  save_token,
+  get_current_user,
+  save_display_name,
+  clear_auth,
+  type UserOut,
+} from "@/lib/api";
 
 /**
  * Returns a list of password rule objects with pass/fail status.
@@ -62,7 +69,17 @@ export default function RegisterPage() {
     try {
       const { access_token } = await register_user(email, password, name);
       save_token(access_token);
-      router.push("/auth/login");
+
+      let user: UserOut;
+      try {
+        user = await get_current_user(access_token);
+      } catch {
+        clear_auth();
+        throw new Error("Could not load your new account. Please try again.");
+      }
+
+      save_display_name(user.display_name ?? user.email);
+      router.push("/");
     } catch (err: unknown) {
       const msg =
         err instanceof Error ? err.message : "Registration failed. Please try again.";

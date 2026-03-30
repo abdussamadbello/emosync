@@ -11,6 +11,8 @@ import {
   save_token,
   get_current_user,
   save_display_name,
+  clear_auth,
+  type UserOut,
 } from "@/lib/api";
 
 /**
@@ -42,7 +44,14 @@ export default function LoginPage() {
       const { access_token } = await login_user(email, password);
       save_token(access_token);
 
-      const user = await get_current_user(access_token);
+      let user: UserOut;
+      try {
+        user = await get_current_user(access_token);
+      } catch {
+        clear_auth();
+        throw new Error("Could not load your account. Please try again.");
+      }
+
       save_display_name(user.display_name ?? user.email);
 
       router.push("/");

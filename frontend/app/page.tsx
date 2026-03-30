@@ -10,9 +10,12 @@ import { use_audio_recorder } from "@/hooks/use-audio-recorder";
 import { mock_speech_to_text, mock_text_to_speech } from "@/lib/mock-audio-service";
 import { Sidebar } from "@/components/sidebar";
 import {
-  get_token, get_display_name, clear_auth,
+  get_token,
+  clear_auth,
   create_conversation, stream_message,
   list_conversations, list_messages,
+  get_current_user,
+  save_display_name,
   type ConversationOut,
 } from "@/lib/api";
 import { read_sse_stream } from "@/lib/sse";
@@ -45,17 +48,41 @@ export default function Home() {
   const responseIndexRef = useRef(0);
   const { theme, setTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
+  const [is_session_loading, setIsSessionLoading] = useState(true);
   const { is_recording, audio_blob, start_recording, stop_recording } =
     use_audio_recorder();
 
   useEffect(() => {
     setMounted(true);
-    const token = get_token();
-    if (token) {
-      setDisplayName(get_display_name());
-      load_conversations(token);
-      initialize_conversation(token);
+
+    /**
+     * Rehydrates the signed-in session from the backend so the UI does not
+     * trust stale localStorage profile data.
+     */
+    async function bootstrap_session() {
+      const token = get_token();
+      if (!token) {
+        setIsSessionLoading(false);
+        return;
+      }
+
+      try {
+        const user = await get_current_user(token);
+        const next_display_name = user.display_name ?? user.email;
+        save_display_name(next_display_name);
+        setDisplayName(next_display_name);
+        await load_conversations(token);
+      } catch {
+        clear_auth();
+        setDisplayName(null);
+        setConversationId(null);
+        setConversations([]);
+      } finally {
+        setIsSessionLoading(false);
+      }
     }
+
+    void bootstrap_session();
   }, []);
 
   /**
@@ -71,17 +98,19 @@ export default function Home() {
   }
 
   /**
-   * Creates a fresh conversation on the backend and stores its id in state.
-   * Refreshes the conversation list so the sidebar updates immediately.
+   * Creates a backend conversation only when the user is about to send the
+   * first real message in a new chat.
    */
-  async function initialize_conversation(token: string) {
+  async function ensure_active_conversation(token: string): Promise<string | null> {
+    if (conversation_id) return conversation_id;
+
     try {
       const conv = await create_conversation(token);
       setConversationId(conv.id);
-      // Refresh sidebar list so the new conversation appears
-      load_conversations(token);
+      return conv.id;
     } catch {
-      setChatError("Could not start a conversation. Please refresh.");
+      setChatError("Could not start a conversation. Please try again.");
+      return null;
     }
   }
 
@@ -112,8 +141,25 @@ export default function Home() {
     clear_auth();
     setDisplayName(null);
     setConversationId(null);
+    setConversations([]);
     setMessages([]);
+    setChatError(null);
     router.push("/auth/login");
+  }
+
+  /**
+   * Removes the placeholder assistant bubble when the stream fails before any
+   * content has been received.
+   */
+  function clear_pending_assistant_message() {
+    setMessages((prev) => {
+      const updated = [...prev];
+      const last = updated[updated.length - 1];
+      if (last?.role === "assistant" && !last.content.trim()) {
+        updated.pop();
+      }
+      return updated;
+    });
   }
 
   useEffect(() => {
@@ -130,14 +176,13 @@ export default function Home() {
     if (!trimmed || isTyping) return;
 
     setChatError(null);
-    setMessages((prev) => [...prev, { role: "user", content: trimmed }]);
-    setInput("");
-    setIsTyping(true);
-
     const token = get_token();
 
     // Guest / unauthenticated: use demo responses
-    if (!token || !conversation_id) {
+    if (!token) {
+      setMessages((prev) => [...prev, { role: "user", content: trimmed }]);
+      setInput("");
+      setIsTyping(true);
       setTimeout(() => {
         const response =
           DEMO_RESPONSES[responseIndexRef.current % DEMO_RESPONSES.length];
@@ -151,12 +196,26 @@ export default function Home() {
       return;
     }
 
+    setInput("");
+    setIsTyping(true);
+
+    const active_conversation_id = await ensure_active_conversation(token);
+    if (!active_conversation_id) {
+      setInput(trimmed);
+      setIsTyping(false);
+      return;
+    }
+
     // Authenticated: stream from backend
-    // Add an empty assistant bubble that we'll fill token-by-token
-    setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
+    // Add the user message plus an empty assistant bubble that we'll fill token-by-token
+    setMessages((prev) => [
+      ...prev,
+      { role: "user", content: trimmed },
+      { role: "assistant", content: "" },
+    ]);
 
     try {
-      const response = await stream_message(token, conversation_id, trimmed);
+      const response = await stream_message(token, active_conversation_id, trimmed);
 
       for await (const evt of read_sse_stream(response)) {
         if (evt.event === "token") {
@@ -174,15 +233,19 @@ export default function Home() {
           });
         } else if (evt.event === "done") {
           setIsTyping(false);
+          void load_conversations(token);
         } else if (evt.event === "error") {
           const msg = (evt.data.message as string) ?? "Assistant error";
+          clear_pending_assistant_message();
           setChatError(msg);
           setIsTyping(false);
+          void load_conversations(token);
         }
       }
     } catch (err: unknown) {
       const msg =
         err instanceof Error ? err.message : "Failed to reach the server.";
+      clear_pending_assistant_message();
       setChatError(msg);
       setIsTyping(false);
     }
@@ -246,16 +309,14 @@ export default function Home() {
       <Sidebar
         open={sidebar_open}
         on_toggle={() => setSidebarOpen((v) => !v)}
-        is_logged_in={!!display_name}
+        is_logged_in={!is_session_loading && !!display_name}
         conversations={conversations}
         active_conversation_id={conversation_id}
         on_select_conversation={select_conversation}
         on_new_chat={() => {
-          if (messages.length === 0) return;
-          const token = get_token();
           setMessages([]);
           setChatError(null);
-          if (token) initialize_conversation(token);
+          setConversationId(null);
         }}
       />
 
@@ -263,7 +324,7 @@ export default function Home() {
       <div className="flex flex-1 flex-col overflow-hidden">
         {/* Top bar */}
         <header className="flex h-14 shrink-0 items-center justify-end gap-3 border-b border-border/40 bg-background/80 px-4 backdrop-blur-md">
-          {mounted && display_name ? (
+          {mounted && !is_session_loading && display_name ? (
             <>
               <span className="flex items-center gap-1.5 text-sm text-muted-foreground">
                 <User className="size-3.5 shrink-0" />
@@ -279,7 +340,8 @@ export default function Home() {
                 Sign Out
               </Button>
             </>
-          ) : (
+          ) : null}
+          {mounted && !is_session_loading && !display_name ? (
             <>
               <Button variant="outline" size="sm" asChild>
                 <Link href="/auth/login">Login</Link>
@@ -291,7 +353,7 @@ export default function Home() {
                 </Link>
               </Button>
             </>
-          )}
+          ) : null}
           {mounted && (
             <Button
               variant="ghost"
