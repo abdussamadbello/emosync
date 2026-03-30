@@ -1,10 +1,12 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
 import { Button } from "@/components/ui/button";
 import { Eye, EyeOff, Sparkles, Check, X } from "lucide-react";
+import { register_user, save_token } from "@/lib/api";
 
 /**
  * Returns a list of password rule objects with pass/fail status.
@@ -18,9 +20,10 @@ function get_password_rules(password: string) {
 }
 
 /**
- * Renders the registration form with name, email, password fields and mock submit handling.
+ * Renders the registration form with name, email, password fields and real backend submit.
  */
 export default function RegisterPage() {
+  const router = useRouter();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -34,7 +37,11 @@ export default function RegisterPage() {
   const password_rules = get_password_rules(password);
   const all_rules_pass = password_rules.every((r) => r.valid);
 
-  function handle_submit(e: React.FormEvent) {
+  /**
+   * Validates fields and submits the registration request to the backend.
+   * Saves the returned JWT and redirects to the home page on success.
+   */
+  async function handle_submit(e: React.FormEvent) {
     e.preventDefault();
     setError("");
 
@@ -52,11 +59,17 @@ export default function RegisterPage() {
     }
 
     setIsLoading(true);
-    // TODO: replace with real registration call to Flask backend
-    setTimeout(() => {
+    try {
+      const { access_token } = await register_user(email, password, name);
+      save_token(access_token);
+      router.push("/auth/login");
+    } catch (err: unknown) {
+      const msg =
+        err instanceof Error ? err.message : "Registration failed. Please try again.";
+      setError(msg);
+    } finally {
       setIsLoading(false);
-      setError("Registration unavailable. (Mock — backend not connected yet)");
-    }, 1200);
+    }
   }
 
   return (
@@ -66,7 +79,7 @@ export default function RegisterPage() {
         <div className="mb-8 flex flex-col items-center gap-3">
           <Link href="/" className="flex items-center gap-2.5">
             <Image
-              src="/logo.ico"
+              src="/logo.png"
               alt="EmoSync"
               width={36}
               height={36}

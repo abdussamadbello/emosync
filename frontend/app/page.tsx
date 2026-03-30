@@ -1,13 +1,15 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import { Sparkles, Send, Mic, MicOff, Moon, Sun, ArrowRight } from "lucide-react";
+import { Sparkles, Send, Mic, MicOff, Moon, Sun, ArrowRight, LogOut, User } from "lucide-react";
 import { useTheme } from "next-themes";
 import { use_audio_recorder } from "@/hooks/use-audio-recorder";
 import { mock_speech_to_text, mock_text_to_speech } from "@/lib/mock-audio-service";
 import { Sidebar } from "@/components/sidebar";
+import { get_token, get_display_name, clear_auth } from "@/lib/api";
 
 interface ChatMessage {
   role: "user" | "assistant";
@@ -24,10 +26,12 @@ const DEMO_RESPONSES: string[] = [
 ];
 
 export default function Home() {
+  const router = useRouter();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [sidebar_open, setSidebarOpen] = useState(true);
+  const [display_name, setDisplayName] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const responseIndexRef = useRef(0);
   const { theme, setTheme } = useTheme();
@@ -35,7 +39,21 @@ export default function Home() {
   const { is_recording, audio_blob, start_recording, stop_recording } =
     use_audio_recorder();
 
-  useEffect(() => setMounted(true), []);
+  useEffect(() => {
+    setMounted(true);
+    if (get_token()) {
+      setDisplayName(get_display_name());
+    }
+  }, []);
+
+  /**
+   * Clears auth data from localStorage and resets UI to logged-out state.
+   */
+  function handle_logout() {
+    clear_auth();
+    setDisplayName(null);
+    router.push("/auth/login");
+  }
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -119,22 +137,42 @@ export default function Home() {
       <Sidebar
         open={sidebar_open}
         on_toggle={() => setSidebarOpen((v) => !v)}
-        is_logged_in={false}
+        is_logged_in={!!display_name}
       />
 
       {/* Main area */}
       <div className="flex flex-1 flex-col overflow-hidden">
         {/* Top bar */}
         <header className="flex h-14 shrink-0 items-center justify-end gap-3 border-b border-border/40 bg-background/80 px-4 backdrop-blur-md">
-          <Button variant="outline" size="sm" asChild>
-            <Link href="/auth/login">Login</Link>
-          </Button>
-          <Button size="sm" asChild>
-            <Link href="/auth/register">
-              Get Started
-              <ArrowRight data-icon="inline-end" className="size-3.5" />
-            </Link>
-          </Button>
+          {mounted && display_name ? (
+            <>
+              <span className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                <User className="size-3.5 shrink-0" />
+                <span className="font-medium text-foreground">{display_name}</span>
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handle_logout}
+                className="gap-1.5"
+              >
+                <LogOut className="size-3.5" />
+                Sign Out
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button variant="outline" size="sm" asChild>
+                <Link href="/auth/login">Login</Link>
+              </Button>
+              <Button size="sm" asChild>
+                <Link href="/auth/register">
+                  Get Started
+                  <ArrowRight data-icon="inline-end" className="size-3.5" />
+                </Link>
+              </Button>
+            </>
+          )}
           {mounted && (
             <Button
               variant="ghost"
