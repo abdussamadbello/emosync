@@ -1,0 +1,161 @@
+"use client";
+
+import Link from "next/link";
+import Image from "next/image";
+import { Button } from "@/components/ui/button";
+import {
+  Plus,
+  Search,
+  MessageSquare,
+  ChevronLeft,
+  ChevronRight,
+  HelpCircle,
+  CreditCard,
+} from "lucide-react";
+
+interface SidebarProps {
+  /** Whether the sidebar is expanded */
+  open: boolean;
+  /** Callback to toggle open/closed */
+  on_toggle: () => void;
+  /** Whether a user is currently logged in */
+  is_logged_in?: boolean;
+}
+
+const MOCK_CHATS = [
+  { id: "1", title: "Feeling overwhelmed at work" },
+  { id: "2", title: "Dealing with anxiety" },
+  { id: "3", title: "Processing grief" },
+];
+
+/**
+ * Collapsible sidebar with navigation links for chat management.
+ */
+export function Sidebar({ open, on_toggle, is_logged_in = false }: SidebarProps) {
+  return (
+    <aside
+      className={`relative flex h-full flex-col border-r border-border bg-sidebar transition-all duration-300 ease-in-out ${
+        open ? "w-64" : "w-14"
+      }`}
+    >
+      {/* Toggle button */}
+      <button
+        onClick={on_toggle}
+        aria-label={open ? "Collapse sidebar" : "Expand sidebar"}
+        className="absolute -right-3 top-5 z-10 flex size-6 items-center justify-center rounded-full border border-border bg-background text-muted-foreground shadow-sm transition-colors hover:bg-muted hover:text-foreground"
+      >
+        {open ? <ChevronLeft className="size-3.5" /> : <ChevronRight className="size-3.5" />}
+      </button>
+
+      {/* Logo */}
+      <div className="flex h-14 items-center border-b border-border px-3">
+        <Link href="/" className="flex min-w-0 items-center gap-2.5">
+          <Image
+            src="/logo.png"
+            alt="EmoSync"
+            width={28}
+            height={28}
+            className="shrink-0 rounded-sm"
+          />
+          {open && (
+            <span className="truncate text-base font-semibold tracking-tight">
+              EmoSync
+            </span>
+          )}
+        </Link>
+      </div>
+
+      {/* Nav links */}
+      <nav className="flex flex-1 flex-col gap-1 overflow-y-auto p-2">
+        {/* New Chat */}
+        <Button
+          variant="ghost"
+          className={`w-full justify-start gap-3 ${open ? "px-3" : "px-0 justify-center"}`}
+          asChild
+        >
+          <Link href="/">
+            <Plus className="size-4 shrink-0" />
+            {open && <span className="truncate">New Chat</span>}
+          </Link>
+        </Button>
+
+        {/* Search */}
+        <Button
+          variant="ghost"
+          className={`w-full justify-start gap-3 ${open ? "px-3" : "px-0 justify-center"}`}
+          asChild
+        >
+          <Link href="/search">
+            <Search className="size-4 shrink-0" />
+            {open && <span className="truncate">Search Chats</span>}
+          </Link>
+        </Button>
+
+        {/* Past chats — only when logged in, expanded */}
+        {is_logged_in && open && (
+          <div className="mt-4">
+            <p className="mb-1 px-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+              Your Chats
+            </p>
+            <div className="flex flex-col gap-0.5">
+              {MOCK_CHATS.map((chat) => (
+                <Button
+                  key={chat.id}
+                  variant="ghost"
+                  className="w-full justify-start gap-3 px-3 text-sm"
+                  asChild
+                >
+                  <Link href={`/chat/${chat.id}`}>
+                    <MessageSquare className="size-4 shrink-0 text-muted-foreground" />
+                    <span className="truncate">{chat.title}</span>
+                  </Link>
+                </Button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Collapsed icon-only past chats */}
+        {is_logged_in && !open && (
+          <Button
+            variant="ghost"
+            className="w-full justify-center px-0"
+            title="Your Chats"
+            asChild
+          >
+            <Link href="/chats">
+              <MessageSquare className="size-4 shrink-0" />
+            </Link>
+          </Button>
+        )}
+      </nav>
+
+      {/* Bottom links */}
+      <div className="flex flex-col gap-1 border-t border-border p-2">
+        <Button
+          variant="ghost"
+          className={`w-full justify-start gap-3 ${open ? "px-3" : "px-0 justify-center"}`}
+          title="Help"
+          asChild
+        >
+          <Link href="/help">
+            <HelpCircle className="size-4 shrink-0" />
+            {open && <span className="truncate">Help</span>}
+          </Link>
+        </Button>
+
+        <Button
+          variant="ghost"
+          className={`w-full justify-start gap-3 ${open ? "px-3" : "px-0 justify-center"}`}
+          title="Subscription"
+          asChild
+        >
+          <Link href="/subscription">
+            <CreditCard className="size-4 shrink-0" />
+            {open && <span className="truncate">Subscription</span>}
+          </Link>
+        </Button>
+      </div>
+    </aside>
+  );
+}
