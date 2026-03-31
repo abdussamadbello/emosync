@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
@@ -12,6 +12,7 @@ import {
   get_current_user,
   save_display_name,
   clear_auth,
+  get_token,
   type UserOut,
 } from "@/lib/api";
 
@@ -25,6 +26,23 @@ export default function LoginPage() {
   const [show_password, setShowPassword] = useState(false);
   const [is_loading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
+  const [is_checking_auth, setIsCheckingAuth] = useState(true);
+
+  useEffect(() => {
+    /**
+     * Redirects already-authenticated users away from the login page so they
+     * cannot see it while logged in.
+     */
+    if (get_token()) {
+      router.replace("/");
+    } else {
+      setIsCheckingAuth(false);
+    }
+  }, [router]);
+
+  if (is_checking_auth) {
+    return null;
+  }
 
   /**
    * Validates fields, authenticates against the backend, saves the JWT and

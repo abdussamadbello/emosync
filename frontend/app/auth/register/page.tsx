@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
@@ -12,6 +12,7 @@ import {
   get_current_user,
   save_display_name,
   clear_auth,
+  get_token,
   type UserOut,
 } from "@/lib/api";
 
@@ -31,6 +32,7 @@ function get_password_rules(password: string) {
  */
 export default function RegisterPage() {
   const router = useRouter();
+  const [is_checking_auth, setIsCheckingAuth] = useState(true);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -40,6 +42,22 @@ export default function RegisterPage() {
   const [is_loading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
   const [password_focused, setPasswordFocused] = useState(false);
+
+  useEffect(() => {
+    /**
+     * Redirects already-authenticated users away from the register page so
+     * they cannot see it while logged in.
+     */
+    if (get_token()) {
+      router.replace("/");
+    } else {
+      setIsCheckingAuth(false);
+    }
+  }, [router]);
+
+  if (is_checking_auth) {
+    return null;
+  }
 
   const password_rules = get_password_rules(password);
   const all_rules_pass = password_rules.every((r) => r.valid);
