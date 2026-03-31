@@ -4,7 +4,7 @@ import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import { Sparkles, Send, Mic, MicOff, Moon, Sun, ArrowRight, LogOut, User } from "lucide-react";
+import { Sparkles, Send, Mic, Moon, Sun, ArrowRight, LogOut, User, Square } from "lucide-react";
 import { useTheme } from "next-themes";
 import { use_audio_recorder } from "@/hooks/use-audio-recorder";
 import { mock_speech_to_text, mock_text_to_speech } from "@/lib/mock-audio-service";
@@ -49,7 +49,10 @@ export default function Home() {
   const { theme, setTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
   const [is_session_loading, setIsSessionLoading] = useState(true);
-  const { is_recording, audio_blob, start_recording, stop_recording } =
+  const [is_voice_mode, setIsVoiceMode] = useState(false);
+  const [voice_status, setVoiceStatus] = useState<"listening" | "processing" | "speaking" | null>(null);
+  const is_voice_mode_ref = useRef(false);
+  const { is_recording, audio_blob, start_recording, stop_recording, analyser_node } =
     use_audio_recorder();
 
   useEffect(() => {
@@ -146,6 +149,77 @@ export default function Home() {
     setChatError(null);
     router.push("/auth/login");
   }
+
+  /**
+   * Enters continuous voice conversation mode: sets voice state, begins
+   * recording, and hands control to the silence-detection and processing loop.
+   */
+  async function enter_voice_mode() {
+    setChatError(null);
+    is_voice_mode_ref.current = true;
+    setIsVoiceMode(true);
+    setVoiceStatus("listening");
+    try {
+      await start_recording();
+    } catch {
+      is_voice_mode_ref.current = false;
+      setIsVoiceMode(false);
+      setVoiceStatus(null);
+      setChatError("Could not access your microphone. Please check permissions.");
+    }
+  }
+
+  /**
+   * Exits voice conversation mode, stops any active recording, and cancels
+   * any in-progress TTS playback.
+   */
+  function exit_voice_mode() {
+    is_voice_mode_ref.current = false;
+    setIsVoiceMode(false);
+    setVoiceStatus(null);
+    stop_recording();
+    speechSynthesis.cancel();
+  }
+
+  /**
+   * Watches the audio analyser while in voice mode and automatically stops
+   * recording after 1.8 s of silence (with a 600 ms warmup so the user has
+   * time to start speaking before silence is measured).
+   */
+  useEffect(() => {
+    if (!analyser_node || !is_voice_mode) return;
+
+    const data = new Uint8Array(analyser_node.frequencyBinCount);
+    const SILENCE_THRESHOLD = 10;
+    const SILENCE_DURATION_MS = 1800;
+    const WARMUP_MS = 600;
+    const started_at = Date.now();
+    let silence_start: number | null = null;
+
+    const interval_id = setInterval(() => {
+      if (!is_voice_mode_ref.current) {
+        clearInterval(interval_id);
+        return;
+      }
+
+      if (Date.now() - started_at < WARMUP_MS) return;
+
+      analyser_node.getByteFrequencyData(data);
+      const avg = data.reduce((a, b) => a + b, 0) / data.length;
+
+      if (avg < SILENCE_THRESHOLD) {
+        if (!silence_start) silence_start = Date.now();
+        else if (Date.now() - silence_start > SILENCE_DURATION_MS) {
+          clearInterval(interval_id);
+          stop_recording();
+        }
+      } else {
+        silence_start = null;
+      }
+    }, 100);
+
+    return () => clearInterval(interval_id);
+  }, [analyser_node, is_voice_mode, stop_recording]);
 
   /**
    * Removes the placeholder assistant bubble when the stream fails before any
@@ -258,48 +332,69 @@ export default function Home() {
     }
   }
 
-  async function handle_voice_toggle() {
-    if (is_recording) {
-      stop_recording();
-    } else {
-      await start_recording();
-    }
-  }
-
+  /**
+   * Processes a completed audio recording: transcribes it, shows messages,
+   * speaks the response via TTS, then automatically restarts recording when
+   * still in voice mode to continue the conversation loop.
+   */
   useEffect(() => {
     if (!audio_blob) return;
 
-    async function process_voice_message() {
+    let cancelled = false;
+
+    async function process_voice_turn() {
+      if (!is_voice_mode_ref.current) return;
+
+      setVoiceStatus("processing");
       setIsTyping(true);
-      const transcription = await mock_speech_to_text(audio_blob!);
 
-      setMessages((prev) => [
-        ...prev,
-        { role: "user", content: transcription, is_voice: true },
-      ]);
+      try {
+        const transcription = await mock_speech_to_text(audio_blob!);
+        if (cancelled) return;
 
-      const response =
-        DEMO_RESPONSES[responseIndexRef.current % DEMO_RESPONSES.length];
-      responseIndexRef.current += 1;
+        setMessages((prev) => [
+          ...prev,
+          { role: "user", content: transcription, is_voice: true },
+        ]);
 
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", content: response, is_voice: true },
-      ]);
-      setIsTyping(false);
+        const response =
+          DEMO_RESPONSES[responseIndexRef.current % DEMO_RESPONSES.length];
+        responseIndexRef.current += 1;
 
-      await mock_text_to_speech(response);
+        setMessages((prev) => [
+          ...prev,
+          { role: "assistant", content: response, is_voice: true },
+        ]);
+        setIsTyping(false);
+
+        setVoiceStatus("speaking");
+        await mock_text_to_speech(response);
+        if (cancelled) return;
+
+        if (is_voice_mode_ref.current) {
+          setVoiceStatus("listening");
+          await start_recording();
+        } else {
+          setVoiceStatus(null);
+        }
+      } catch {
+        if (!cancelled) {
+          setIsTyping(false);
+          is_voice_mode_ref.current = false;
+          setIsVoiceMode(false);
+          setVoiceStatus(null);
+          setChatError("Voice session ended unexpectedly. Please try again.");
+          speechSynthesis.cancel();
+        }
+      }
     }
 
-    const url = URL.createObjectURL(audio_blob!);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `emosync-recording-${Date.now()}.webm`;
-    a.click();
-    URL.revokeObjectURL(url);
+    void process_voice_turn();
 
-    process_voice_message();
-  }, [audio_blob]);
+    return () => {
+      cancelled = true;
+    };
+  }, [audio_blob, start_recording]);
 
   const has_messages = messages.length > 0 || isTyping;
 
@@ -455,40 +550,75 @@ export default function Home() {
               <p className="mb-2 text-center text-[11px] text-muted-foreground/70">
                 EmoSync can make mistakes. Always seek professional help for serious mental health concerns.
               </p>
-              <div className="flex items-center gap-2">
-                <input
-                  type="text"
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={handle_key_down}
-                  placeholder={
-                    is_recording ? "Listening..." : "How are you feeling today?"
-                  }
-                  disabled={is_recording || isTyping}
-                  className="flex-1 rounded-lg border border-input bg-transparent px-3 py-2 text-sm outline-none placeholder:text-muted-foreground focus:border-ring focus:ring-2 focus:ring-ring/30 disabled:cursor-not-allowed disabled:opacity-50"
-                />
-                <Button
-                  size="icon"
-                  variant={is_recording ? "destructive" : "outline"}
-                  onClick={handle_voice_toggle}
-                  disabled={isTyping}
-                  title={is_recording ? "Stop recording" : "Start voice input"}
-                  className={is_recording ? "animate-pulse" : ""}
-                >
-                  {is_recording ? (
-                    <MicOff className="size-4" />
-                  ) : (
+
+              {is_voice_mode ? (
+                /* Voice mode panel — replaces the text input while in session */
+                <div className="flex flex-col items-center gap-3 py-2">
+                  {/* Animated status pill */}
+                  <div className="flex items-center gap-2.5 rounded-full border border-border bg-muted/50 px-4 py-1.5">
+                    <span
+                      className={`size-2 rounded-full ${
+                        voice_status === "listening"
+                          ? "animate-pulse bg-green-500"
+                          : voice_status === "processing"
+                          ? "animate-pulse bg-amber-500"
+                          : voice_status === "speaking"
+                          ? "animate-pulse bg-blue-500"
+                          : "bg-muted-foreground/40"
+                      }`}
+                    />
+                    <span className="text-sm text-muted-foreground">
+                      {voice_status === "listening"
+                        ? "Listening…"
+                        : voice_status === "processing"
+                        ? "Processing…"
+                        : voice_status === "speaking"
+                        ? "Speaking…"
+                        : "Starting…"}
+                    </span>
+                  </div>
+
+                  {/* End voice session */}
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={exit_voice_mode}
+                    className="gap-2 px-5"
+                  >
+                    <Square className="size-3 fill-current" />
+                    End Voice Chat
+                  </Button>
+                </div>
+              ) : (
+                /* Normal text input */
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    onKeyDown={handle_key_down}
+                    placeholder="How are you feeling today?"
+                    disabled={isTyping}
+                    className="flex-1 rounded-lg border border-input bg-transparent px-3 py-2 text-sm outline-none placeholder:text-muted-foreground focus:border-ring focus:ring-2 focus:ring-ring/30 disabled:cursor-not-allowed disabled:opacity-50"
+                  />
+                  <Button
+                    size="icon"
+                    variant="outline"
+                    onClick={enter_voice_mode}
+                    disabled={isTyping || is_recording}
+                    title="Start voice chat"
+                  >
                     <Mic className="size-4" />
-                  )}
-                </Button>
-                <Button
-                  size="icon"
-                  onClick={handle_send}
-                  disabled={!input.trim() || isTyping || is_recording}
-                >
-                  <Send className="size-4" />
-                </Button>
-              </div>
+                  </Button>
+                  <Button
+                    size="icon"
+                    onClick={handle_send}
+                    disabled={!input.trim() || isTyping || is_recording}
+                  >
+                    <Send className="size-4" />
+                  </Button>
+                </div>
+              )}
             </div>
           </div>
         </main>
