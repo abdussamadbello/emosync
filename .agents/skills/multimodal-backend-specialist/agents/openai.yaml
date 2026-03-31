@@ -1,0 +1,8 @@
+interface:
+  display_name: "Multimodal Backend Specialist"
+  short_description: "Build EmoSync voice and realtime backend flows"
+  default_prompt: "Use $multimodal-backend-specialist to implement or refactor EmoSync's FastAPI voice pipeline, including WebSockets, Whisper-style STT, ElevenLabs TTS, and audio buffering."
+
+policy:
+  allow_implicit_invocation: true
+
