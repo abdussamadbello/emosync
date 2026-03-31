@@ -1,13 +1,24 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import { Sparkles, Send, Mic, MicOff, Moon, Sun, ArrowRight } from "lucide-react";
+import { Sparkles, Send, Mic, MicOff, Moon, Sun, ArrowRight, LogOut, User } from "lucide-react";
 import { useTheme } from "next-themes";
 import { use_audio_recorder } from "@/hooks/use-audio-recorder";
 import { mock_speech_to_text, mock_text_to_speech } from "@/lib/mock-audio-service";
 import { Sidebar } from "@/components/sidebar";
+import {
+  get_token,
+  clear_auth,
+  create_conversation, stream_message,
+  list_conversations, list_messages,
+  get_current_user,
+  save_display_name,
+  type ConversationOut,
+} from "@/lib/api";
+import { read_sse_stream } from "@/lib/sse";
 
 interface ChatMessage {
   role: "user" | "assistant";
@@ -24,41 +35,220 @@ const DEMO_RESPONSES: string[] = [
 ];
 
 export default function Home() {
+  const router = useRouter();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [sidebar_open, setSidebarOpen] = useState(true);
+  const [display_name, setDisplayName] = useState<string | null>(null);
+  const [conversation_id, setConversationId] = useState<string | null>(null);
+  const [conversations, setConversations] = useState<ConversationOut[]>([]);
+  const [chat_error, setChatError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const responseIndexRef = useRef(0);
   const { theme, setTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
+  const [is_session_loading, setIsSessionLoading] = useState(true);
   const { is_recording, audio_blob, start_recording, stop_recording } =
     use_audio_recorder();
 
-  useEffect(() => setMounted(true), []);
+  useEffect(() => {
+    setMounted(true);
+
+    /**
+     * Rehydrates the signed-in session from the backend so the UI does not
+     * trust stale localStorage profile data.
+     */
+    async function bootstrap_session() {
+      const token = get_token();
+      if (!token) {
+        setIsSessionLoading(false);
+        return;
+      }
+
+      try {
+        const user = await get_current_user(token);
+        const next_display_name = user.display_name ?? user.email;
+        save_display_name(next_display_name);
+        setDisplayName(next_display_name);
+        await load_conversations(token);
+      } catch {
+        clear_auth();
+        setDisplayName(null);
+        setConversationId(null);
+        setConversations([]);
+      } finally {
+        setIsSessionLoading(false);
+      }
+    }
+
+    void bootstrap_session();
+  }, []);
+
+  /**
+   * Fetches all conversations for the current user and updates sidebar state.
+   */
+  async function load_conversations(token: string) {
+    try {
+      const data = await list_conversations(token);
+      setConversations(data);
+    } catch {
+      // Non-critical — sidebar list just stays empty
+    }
+  }
+
+  /**
+   * Creates a backend conversation only when the user is about to send the
+   * first real message in a new chat.
+   */
+  async function ensure_active_conversation(token: string): Promise<string | null> {
+    if (conversation_id) return conversation_id;
+
+    try {
+      const conv = await create_conversation(token);
+      setConversationId(conv.id);
+      return conv.id;
+    } catch {
+      setChatError("Could not start a conversation. Please try again.");
+      return null;
+    }
+  }
+
+  /**
+   * Loads a past conversation: sets it as active and fetches its message history.
+   */
+  async function select_conversation(id: string) {
+    const token = get_token();
+    if (!token) return;
+
+    setChatError(null);
+    setConversationId(id);
+
+    try {
+      const history = await list_messages(token, id);
+      setMessages(
+        history.map((m) => ({ role: m.role as "user" | "assistant", content: m.content }))
+      );
+    } catch {
+      setChatError("Could not load conversation history.");
+    }
+  }
+
+  /**
+   * Clears auth data from localStorage and resets UI to logged-out state.
+   */
+  function handle_logout() {
+    clear_auth();
+    setDisplayName(null);
+    setConversationId(null);
+    setConversations([]);
+    setMessages([]);
+    setChatError(null);
+    router.push("/auth/login");
+  }
+
+  /**
+   * Removes the placeholder assistant bubble when the stream fails before any
+   * content has been received.
+   */
+  function clear_pending_assistant_message() {
+    setMessages((prev) => {
+      const updated = [...prev];
+      const last = updated[updated.length - 1];
+      if (last?.role === "assistant" && !last.content.trim()) {
+        updated.pop();
+      }
+      return updated;
+    });
+  }
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isTyping]);
 
-  function handle_send() {
+  /**
+   * Sends the user's message to the backend and streams the assistant's
+   * response word-by-word via SSE, appending tokens to the UI in real time.
+   * Falls back to the demo responses when the user is not logged in.
+   */
+  async function handle_send() {
     const trimmed = input.trim();
     if (!trimmed || isTyping) return;
 
-    setMessages((prev) => [...prev, { role: "user", content: trimmed }]);
+    setChatError(null);
+    const token = get_token();
+
+    // Guest / unauthenticated: use demo responses
+    if (!token) {
+      setMessages((prev) => [...prev, { role: "user", content: trimmed }]);
+      setInput("");
+      setIsTyping(true);
+      setTimeout(() => {
+        const response =
+          DEMO_RESPONSES[responseIndexRef.current % DEMO_RESPONSES.length];
+        responseIndexRef.current += 1;
+        setMessages((prev) => [
+          ...prev,
+          { role: "assistant", content: response },
+        ]);
+        setIsTyping(false);
+      }, 1200);
+      return;
+    }
+
     setInput("");
     setIsTyping(true);
 
-    setTimeout(() => {
-      const response =
-        DEMO_RESPONSES[responseIndexRef.current % DEMO_RESPONSES.length];
-      responseIndexRef.current += 1;
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", content: response },
-      ]);
+    const active_conversation_id = await ensure_active_conversation(token);
+    if (!active_conversation_id) {
+      setInput(trimmed);
       setIsTyping(false);
-    }, 1200);
+      return;
+    }
+
+    // Authenticated: stream from backend
+    // Add the user message plus an empty assistant bubble that we'll fill token-by-token
+    setMessages((prev) => [
+      ...prev,
+      { role: "user", content: trimmed },
+      { role: "assistant", content: "" },
+    ]);
+
+    try {
+      const response = await stream_message(token, active_conversation_id, trimmed);
+
+      for await (const evt of read_sse_stream(response)) {
+        if (evt.event === "token") {
+          const fragment = (evt.data.text as string) ?? "";
+          setMessages((prev) => {
+            const updated = [...prev];
+            const last = updated[updated.length - 1];
+            if (last?.role === "assistant") {
+              updated[updated.length - 1] = {
+                ...last,
+                content: last.content + fragment,
+              };
+            }
+            return updated;
+          });
+        } else if (evt.event === "done") {
+          setIsTyping(false);
+          void load_conversations(token);
+        } else if (evt.event === "error") {
+          const msg = (evt.data.message as string) ?? "Assistant error";
+          clear_pending_assistant_message();
+          setChatError(msg);
+          setIsTyping(false);
+          void load_conversations(token);
+        }
+      }
+    } catch (err: unknown) {
+      const msg =
+        err instanceof Error ? err.message : "Failed to reach the server.";
+      clear_pending_assistant_message();
+      setChatError(msg);
+      setIsTyping(false);
+    }
   }
 
   function handle_key_down(e: React.KeyboardEvent<HTMLInputElement>) {
@@ -119,22 +309,51 @@ export default function Home() {
       <Sidebar
         open={sidebar_open}
         on_toggle={() => setSidebarOpen((v) => !v)}
-        is_logged_in={false}
+        is_logged_in={!is_session_loading && !!display_name}
+        conversations={conversations}
+        active_conversation_id={conversation_id}
+        on_select_conversation={select_conversation}
+        on_new_chat={() => {
+          setMessages([]);
+          setChatError(null);
+          setConversationId(null);
+        }}
       />
 
       {/* Main area */}
       <div className="flex flex-1 flex-col overflow-hidden">
         {/* Top bar */}
         <header className="flex h-14 shrink-0 items-center justify-end gap-3 border-b border-border/40 bg-background/80 px-4 backdrop-blur-md">
-          <Button variant="outline" size="sm" asChild>
-            <Link href="/auth/login">Login</Link>
-          </Button>
-          <Button size="sm" asChild>
-            <Link href="/auth/register">
-              Get Started
-              <ArrowRight data-icon="inline-end" className="size-3.5" />
-            </Link>
-          </Button>
+          {mounted && !is_session_loading && display_name ? (
+            <>
+              <span className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                <User className="size-3.5 shrink-0" />
+                <span className="font-medium text-foreground">{display_name}</span>
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handle_logout}
+                className="gap-1.5"
+              >
+                <LogOut className="size-3.5" />
+                Sign Out
+              </Button>
+            </>
+          ) : null}
+          {mounted && !is_session_loading && !display_name ? (
+            <>
+              <Button variant="outline" size="sm" asChild>
+                <Link href="/auth/login">Login</Link>
+              </Button>
+              <Button size="sm" asChild>
+                <Link href="/auth/register">
+                  Get Started
+                  <ArrowRight data-icon="inline-end" className="size-3.5" />
+                </Link>
+              </Button>
+            </>
+          ) : null}
           {mounted && (
             <Button
               variant="ghost"
@@ -228,6 +447,11 @@ export default function Home() {
 
             {/* Input bar */}
             <div className="border-t border-border bg-background px-3 pt-3 pb-1">
+              {chat_error && (
+                <p className="mb-2 rounded-lg bg-destructive/10 px-3 py-2 text-center text-xs text-destructive">
+                  {chat_error}
+                </p>
+              )}
               <p className="mb-2 text-center text-[11px] text-muted-foreground/70">
                 EmoSync can make mistakes. Always seek professional help for serious mental health concerns.
               </p>

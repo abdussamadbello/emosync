@@ -1,22 +1,54 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
 import { Button } from "@/components/ui/button";
 import { Eye, EyeOff, Sparkles } from "lucide-react";
+import {
+  login_user,
+  save_token,
+  get_current_user,
+  save_display_name,
+  clear_auth,
+  get_token,
+  type UserOut,
+} from "@/lib/api";
 
 /**
- * Renders the login form with email, password, and mock submit handling.
+ * Renders the login form with email and password fields wired to the backend.
  */
 export default function LoginPage() {
+  const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [show_password, setShowPassword] = useState(false);
   const [is_loading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
+  const [is_checking_auth, setIsCheckingAuth] = useState(true);
 
-  function handle_submit(e: React.FormEvent) {
+  useEffect(() => {
+    /**
+     * Redirects already-authenticated users away from the login page so they
+     * cannot see it while logged in.
+     */
+    if (get_token()) {
+      router.replace("/");
+    } else {
+      setIsCheckingAuth(false);
+    }
+  }, [router]);
+
+  if (is_checking_auth) {
+    return null;
+  }
+
+  /**
+   * Validates fields, authenticates against the backend, saves the JWT and
+   * display name, then redirects to the home page.
+   */
+  async function handle_submit(e: React.FormEvent) {
     e.preventDefault();
     setError("");
 
@@ -26,11 +58,28 @@ export default function LoginPage() {
     }
 
     setIsLoading(true);
-    // TODO: replace with real auth call to Flask backend
-    setTimeout(() => {
+    try {
+      const { access_token } = await login_user(email, password);
+      save_token(access_token);
+
+      let user: UserOut;
+      try {
+        user = await get_current_user(access_token);
+      } catch {
+        clear_auth();
+        throw new Error("Could not load your account. Please try again.");
+      }
+
+      save_display_name(user.display_name ?? user.email);
+
+      router.push("/");
+    } catch (err: unknown) {
+      const msg =
+        err instanceof Error ? err.message : "Login failed. Please try again.";
+      setError(msg);
+    } finally {
       setIsLoading(false);
-      setError("Invalid email or password. (Mock — backend not connected yet)");
-    }, 1200);
+    }
   }
 
   return (
@@ -40,7 +89,7 @@ export default function LoginPage() {
         <div className="mb-8 flex flex-col items-center gap-3">
           <Link href="/" className="flex items-center gap-2.5">
             <Image
-              src="/logo.ico"
+              src="/logo.png"
               alt="EmoSync"
               width={36}
               height={36}
