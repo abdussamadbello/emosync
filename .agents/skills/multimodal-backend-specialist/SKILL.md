@@ -11,16 +11,7 @@ The current backend already has:
 
 - FastAPI app setup in `backend/app/main.py`
 - Authenticated chat routes in `backend/app/api/v1/chat.py`
-- A single text-response boundary in `backend/app/services/chat_turn.py`
 - SSE token streaming for text responses
-
-The current backend does not yet have:
-
-- Voice session routes
-- Audio buffering/session state
-- Whisper/STT adapters
-- ElevenLabs/TTS adapters
-- Real-time duplex coordination between audio input, agent turns, and audio output
 
 ## Goals
 
