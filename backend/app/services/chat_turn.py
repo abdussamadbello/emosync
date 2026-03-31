@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from collections.abc import AsyncIterator
 
 from app.core.config import settings
@@ -29,22 +30,48 @@ async def run_turn(
     When GEMINI_API_KEY is set, the full agentic pipeline is used.
     Otherwise a deterministic stub is returned (useful for tests / local dev).
     """
+    text, _prosody_hint = await run_turn_full(
+        user_message=user_message,
+        conversation_id=conversation_id,
+        user_message_id=user_message_id,
+        conversation_history=conversation_history,
+    )
+
+    words = text.split()
+    for i, word in enumerate(words):
+        token = word + (" " if i < len(words) - 1 else "")
+        yield token
+        await asyncio.sleep(0.01)
+
+
+async def run_turn_full(
+    *,
+    user_message: str,
+    conversation_id: str,
+    user_message_id: str,
+    conversation_history: list[dict[str, str]] | None = None,
+) -> tuple[str, str | None]:
+    """Return assistant text and optional prosody hint.
+
+    The text is always safe for display. Prosody is returned separately for
+    voice synthesis pipelines.
+    """
     if not settings.gemini_api_key:
-        async for token in _stub_response(
+        text = await _stub_response_text(
             user_message=user_message,
             conversation_id=conversation_id,
             user_message_id=user_message_id,
-        ):
-            yield token
-        return
+        )
+        return text, "gentle, warm tone"
 
-    async for token in _agent_response(
+    final_text = await _agent_response_text(
         user_message=user_message,
         conversation_id=conversation_id,
         user_message_id=user_message_id,
         conversation_history=conversation_history or [],
-    ):
-        yield token
+    )
+    cleaned, prosody = _strip_trailing_prosody_hint(final_text)
+    return cleaned, prosody
 
 
 async def _stub_response(
@@ -66,6 +93,21 @@ async def _stub_response(
         await asyncio.sleep(0.02)
 
 
+async def _stub_response_text(
+    *,
+    user_message: str,
+    conversation_id: str,
+    user_message_id: str,
+) -> str:
+    preview = user_message.strip().replace("\n", " ")
+    if len(preview) > 120:
+        preview = preview[:117] + "..."
+    return (
+        f"[stub assistant] Thanks for sharing. (conversation={conversation_id[:8]}…, "
+        f"msg={user_message_id[:8]}…) You said: {preview}"
+    )
+
+
 async def _agent_response(
     *,
     user_message: str,
@@ -74,6 +116,32 @@ async def _agent_response(
     conversation_history: list[dict[str, str]],
 ) -> AsyncIterator[str]:
     """Run the full Historian → Specialist → Anchor pipeline via LangGraph."""
+    final_text = await _agent_response_text(
+        user_message=user_message,
+        conversation_id=conversation_id,
+        user_message_id=user_message_id,
+        conversation_history=conversation_history,
+    )
+
+    # Strip prosody hint before streaming to text (e.g. "[speak slowly, warm tone]")
+    cleaned_text, _prosody = _strip_trailing_prosody_hint(final_text)
+
+    # Stream word-by-word for SSE token events
+    words = cleaned_text.split()
+    for i, word in enumerate(words):
+        token = word + (" " if i < len(words) - 1 else "")
+        yield token
+        await asyncio.sleep(0.01)
+
+
+async def _agent_response_text(
+    *,
+    user_message: str,
+    conversation_id: str,
+    user_message_id: str,
+    conversation_history: list[dict[str, str]],
+) -> str:
+    """Run the full Historian → Specialist → Anchor pipeline and return full text."""
     from app.agent.graph import grief_coach_graph
     from app.agent.state import AgentState
 
@@ -96,15 +164,17 @@ async def _agent_response(
             "Could you tell me a bit more about what's on your mind?"
         )
 
-    # Strip prosody hint before streaming to text (e.g. "[speak slowly, warm tone]")
-    if final_text.rstrip().endswith("]"):
-        bracket_start = final_text.rfind("[")
-        if bracket_start != -1 and bracket_start > len(final_text) - 100:
-            final_text = final_text[:bracket_start].rstrip()
+    return final_text
 
-    # Stream word-by-word for SSE token events
-    words = final_text.split()
-    for i, word in enumerate(words):
-        token = word + (" " if i < len(words) - 1 else "")
-        yield token
-        await asyncio.sleep(0.01)
+
+def _strip_trailing_prosody_hint(text: str) -> tuple[str, str | None]:
+    """Extract trailing prosody hint from the final response.
+
+    Expected shape: "... [speak slowly, warm tone]".
+    """
+    match = re.search(r"\[([^\[\]]{1,100})\]\s*$", text)
+    if not match:
+        return text, None
+    hint = match.group(1).strip()
+    cleaned = text[: match.start()].rstrip()
+    return cleaned, hint or None

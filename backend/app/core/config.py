@@ -16,6 +16,18 @@ class Settings(BaseSettings):
     # When unset, chat falls back to a deterministic stub (safe for CI / local dev).
     gemini_api_key: str | None = None
 
+    # ElevenLabs TTS configuration.
+    # Keep optional for local dev: when unset, TTS falls back to deterministic stub audio.
+    elevenlabs_api_key: str | None = None
+    elevenlabs_voice_id: str = "EXAVITQu4vr4xnSDxMaL"
+    elevenlabs_model_id: str = "eleven_turbo_v2_5"
+
+    # Voice realtime defaults.
+    voice_output_format: str = "mp3_22050_32"
+    voice_chunk_bytes: int = 4096
+    voice_input_buffer_max_bytes: int = 2_000_000
+    voice_session_idle_timeout_seconds: int = 300
+
     # JWT auth
     jwt_secret: str = "change-me-in-production"
     jwt_algorithm: str = "HS256"
