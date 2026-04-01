@@ -1,17 +1,21 @@
 from __future__ import annotations
 
+import base64
 import uuid
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
 from sqlalchemy import select
 
+from app.core.config import settings
 from app.core.database import SessionLocal
 from app.core.security import decode_access_token
 from app.models.conversation import Conversation
 from app.models.message import Message
 from app.models.user import User
 from app.schemas.voice import InputTextFinal, VoiceClientEvent, VoiceServerEvent
+from app.services.audio.buffer import AudioBuffer
 from app.services.realtime.orchestrator import VoiceOrchestrator
+from app.services.stt.elevenlabs_stt import build_stt_service
 from app.services.tts.elevenlabs import build_tts_service
 
 router = APIRouter(tags=["voice"])
@@ -62,6 +66,8 @@ async def voice_ws(websocket: WebSocket, conversation_id: uuid.UUID) -> None:
     await websocket.send_json(VoiceServerEvent(type="session.ready", data={"conversation_id": str(conversation_id)}).model_dump())
 
     orchestrator = VoiceOrchestrator(tts_service=build_tts_service())
+    stt_service = build_stt_service()
+    audio_buffer = AudioBuffer(max_bytes=settings.voice_input_buffer_max_bytes)
 
     try:
         while True:
@@ -76,19 +82,32 @@ async def voice_ws(websocket: WebSocket, conversation_id: uuid.UUID) -> None:
                 await websocket.send_json(VoiceServerEvent(type="turn.done", data={"cancelled": True}).model_dump())
                 continue
 
-            if event.type == "input_audio.append" or event.type == "input_audio.commit":
-                await websocket.send_json(
-                    VoiceServerEvent(
-                        type="error",
-                        data={
-                            "code": "stt_not_implemented",
-                            "message": "Server-side STT is not implemented in this phase. Send input_text.final.",
-                        },
-                    ).model_dump()
-                )
+            if event.type == "input_audio.append":
+                raw_audio = event.data.get("audio", "")
+                if raw_audio:
+                    audio_buffer.append(base64.b64decode(raw_audio))
                 continue
 
-            if event.type != "input_text.final":
+            if event.type == "input_audio.commit":
+                audio_bytes = audio_buffer.flush()
+                if not audio_bytes:
+                    await websocket.send_json(
+                        VoiceServerEvent(type="error", data={"code": "empty_audio", "message": "No audio to transcribe."}).model_dump()
+                    )
+                    continue
+                mime_type = event.data.get("mime_type", "audio/wav")
+                transcript = await stt_service.transcribe(audio_bytes, mime_type=mime_type)
+                if not transcript.strip():
+                    await websocket.send_json(
+                        VoiceServerEvent(type="error", data={"code": "empty_transcript", "message": "No speech detected."}).model_dump()
+                    )
+                    continue
+
+            elif event.type == "input_text.final":
+                payload = InputTextFinal.model_validate(event.data)
+                transcript = payload.text
+
+            else:
                 await websocket.send_json(
                     VoiceServerEvent(
                         type="error",
@@ -96,9 +115,6 @@ async def voice_ws(websocket: WebSocket, conversation_id: uuid.UUID) -> None:
                     ).model_dump()
                 )
                 continue
-
-            payload = InputTextFinal.model_validate(event.data)
-            transcript = payload.text
 
             async with SessionLocal() as session:
                 user_message = Message(conversation_id=conversation_id, role="user", content=transcript)

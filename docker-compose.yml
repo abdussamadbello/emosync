@@ -25,6 +25,9 @@ services:
       DATABASE_URL: postgresql+asyncpg://emosync:emosync@db:5432/emosync
       DATABASE_URL_SYNC: postgresql://emosync:emosync@db:5432/emosync
       CORS_ORIGINS: http://localhost:3000
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
+      ELEVENLABS_VOICE_ID: ${ELEVENLABS_VOICE_ID:-EXAVITQu4vr4xnSDxMaL}
     depends_on:
       db:
         condition: service_healthy

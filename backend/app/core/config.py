@@ -3,7 +3,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+        env_file=(".env", "../.env"), env_file_encoding="utf-8", extra="ignore"
     )
 
     database_url: str = "postgresql+asyncpg://emosync:emosync@localhost:5432/emosync"
@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     # Gemini API key for the LangGraph agent pipeline.
     # When unset, chat falls back to a deterministic stub (safe for CI / local dev).
     gemini_api_key: str | None = None
+
+    # ElevenLabs STT model (Scribe).
+    elevenlabs_stt_model_id: str = "scribe_v2"
 
     # ElevenLabs TTS configuration.
     # Keep optional for local dev: when unset, TTS falls back to deterministic stub audio.
