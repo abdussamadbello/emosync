@@ -27,8 +27,6 @@ interface SidebarProps {
   conversations?: ConversationOut[];
   /** Id of the currently active conversation (highlighted) */
   active_conversation_id?: string | null;
-  /** Called with the conversation id when the user selects a past chat */
-  on_select_conversation?: (id: string) => void;
 }
 
 /**
@@ -49,7 +47,6 @@ export function Sidebar({
   on_new_chat,
   conversations = [],
   active_conversation_id,
-  on_select_conversation,
 }: SidebarProps) {
   return (
     <aside
@@ -125,10 +122,12 @@ export function Sidebar({
                       key={conv.id}
                       variant={is_active ? "secondary" : "ghost"}
                       className="w-full justify-start gap-3 px-3 text-sm"
-                      onClick={() => on_select_conversation?.(conv.id)}
+                      asChild
                     >
-                      <MessageSquare className="size-4 shrink-0 text-muted-foreground" />
-                      <span className="truncate">{conversation_label(conv)}</span>
+                      <Link href={`/c/${conv.id}`}>
+                        <MessageSquare className="size-4 shrink-0 text-muted-foreground" />
+                        <span className="truncate">{conversation_label(conv)}</span>
+                      </Link>
                     </Button>
                   );
                 })

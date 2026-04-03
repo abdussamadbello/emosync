@@ -1,13 +1,21 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect } from "react";
-import { use_speech_recognition } from "@/hooks/use_speech_recognition";
 
 const WS_BASE =
   (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000").replace(
     /^http/,
     "ws"
   );
+
+/** Average byte-frequency amplitude (0–255) below which we consider silence. */
+const SILENCE_THRESHOLD = 8;
+/** Consecutive milliseconds of silence before committing the audio turn. */
+const SILENCE_DURATION_MS = 1_400;
+/** Minimum recording duration before silence detection can commit. */
+const MIN_SPEECH_MS = 400;
+/** MediaRecorder chunk interval in milliseconds. */
+const CHUNK_INTERVAL_MS = 200;
 
 export type VoiceChatStatus =
   | "disconnected"
@@ -18,7 +26,7 @@ export type VoiceChatStatus =
   | "error";
 
 interface UseVoiceChatOptions {
-  /** Called when STT finalises a user utterance (add it to your message list). */
+  /** Called when the backend confirms the user's transcribed utterance. */
   on_user_transcript: (text: string) => void;
   /** Called when the full assistant turn is complete (text + audio done). */
   on_assistant_message: (text: string) => void;
@@ -32,25 +40,27 @@ interface UseVoiceChatReturn {
   status: VoiceChatStatus;
   /** Streams in the current assistant reply word-by-word. Reset on each turn. */
   streaming_text: string;
+  /** True when the browser supports getUserMedia (MediaRecorder-based, so universally true in modern browsers). */
   is_stt_supported: boolean;
+  /** Always empty — server-side STT does not provide interim transcripts. */
   interim_transcript: string;
   /**
-   * Opens the voice WebSocket for the given conversation and starts listening.
-   * Creates a new conversation automatically if conversation_id is null.
+   * Opens the voice WebSocket for the given conversation and starts the mic.
+   * Audio is streamed to the backend for ElevenLabs STT.
    */
   connect: (conversation_id: string, token: string) => Promise<void>;
-  /** Closes the WebSocket, cancels audio, and stops the mic. */
+  /** Closes the WebSocket, stops the mic, and cancels any ongoing audio. */
   disconnect: () => void;
 }
 
 /**
- * Manages the full voice-to-voice loop:
- *   Web Speech API STT → backend WebSocket agent → ElevenLabs TTS (AudioContext)
+ * Manages the full voice-to-voice loop using server-side ElevenLabs STT:
+ *   MediaRecorder mic → input_audio.append chunks → backend STT → agent → ElevenLabs TTS
  *
- * Text is buffered silently during the agent turn, then revealed word-by-word
- * in sync with the audio playback so the user sees + hears the response at the
- * same pace.  The mic is killed during processing/playback to prevent it from
- * picking up the assistant's spoken output.
+ * Silence detection (via AnalyserNode) auto-commits the audio turn after
+ * SILENCE_DURATION_MS of quiet following at least MIN_SPEECH_MS of speech.
+ * The backend sends back a user.transcript event so the transcript appears
+ * in the chat, followed by the streamed assistant response + audio.
  */
 export function use_voice_chat({
   on_user_transcript,
@@ -60,14 +70,34 @@ export function use_voice_chat({
 }: UseVoiceChatOptions): UseVoiceChatReturn {
   const [status, setStatus] = useState<VoiceChatStatus>("disconnected");
   const [streaming_text, setStreamingText] = useState("");
+  const [is_stt_supported, setIsSttSupported] = useState(false);
 
+  // WebSocket
   const ws_ref = useRef<WebSocket | null>(null);
+
+  // TTS playback buffers
   const audio_chunks_ref = useRef<string[]>([]);
   const full_text_ref = useRef("");
-  const is_busy_ref = useRef(false);
   const reveal_timer_ref = useRef<number | null>(null);
 
-  // Stable refs so callbacks set after mount see the latest versions.
+  // Mic / recording refs
+  const media_recorder_ref = useRef<MediaRecorder | null>(null);
+  const stream_ref = useRef<MediaStream | null>(null);
+  const audio_ctx_ref = useRef<AudioContext | null>(null);
+  const analyser_ref = useRef<AnalyserNode | null>(null);
+  const silence_check_ref = useRef<number | null>(null);
+  const silence_start_ref = useRef<number | null>(null);
+  const recording_start_ref = useRef<number>(0);
+  const mime_type_ref = useRef<string>("audio/webm");
+
+  // Pending async chunk encodes — used to drain before sending commit.
+  const pending_sends_ref = useRef(0);
+  const commit_pending_ref = useRef(false);
+
+  // Busy guard: true while backend is processing or speaking
+  const is_busy_ref = useRef(false);
+
+  // Stable callback refs so WS handlers always call the latest versions.
   const on_user_transcript_ref = useRef(on_user_transcript);
   const on_assistant_message_ref = useRef(on_assistant_message);
   const on_assistant_delta_ref = useRef(on_assistant_delta);
@@ -77,12 +107,15 @@ export function use_voice_chat({
   useEffect(() => { on_assistant_delta_ref.current = on_assistant_delta; }, [on_assistant_delta]);
   useEffect(() => { on_error_ref.current = on_error; }, [on_error]);
 
-  const start_stt_ref = useRef<() => void>(() => {});
-  const stop_stt_ref = useRef<() => void>(() => {});
+  // Stable refs for start/stop mic (called from WS callbacks without re-renders).
+  const start_mic_ref = useRef<() => Promise<void>>(async () => {});
+  const stop_mic_ref = useRef<() => void>(() => {});
 
-  // ── Text reveal ────────────────────────────────────────────────────────────
-  // These only touch refs, so they are render-stable and safe to call from
-  // any useCallback without adding them to dependency arrays.
+  useEffect(() => {
+    setIsSttSupported(!!navigator.mediaDevices?.getUserMedia);
+  }, []);
+
+  // ── Text reveal ─────────────────────────────────────────────────────────────
 
   /**
    * Cancels any in-flight word-by-word reveal timer.
@@ -96,7 +129,7 @@ export function use_voice_chat({
 
   /**
    * Splits text into words and feeds them to on_assistant_delta one at a time,
-   * spaced evenly over duration_ms so the text appears in sync with audio.
+   * spaced evenly over duration_ms so text appears in sync with audio playback.
    */
   function start_text_reveal(text: string, duration_ms: number) {
     clear_reveal_timer();
@@ -119,19 +152,20 @@ export function use_voice_chat({
   // ── Audio playback ──────────────────────────────────────────────────────────
 
   /**
-   * Called when audio playback finishes (ElevenLabs or fallback).
-   * Clears busy state, stops any remaining text reveal, and restarts the mic.
+   * Called when audio playback finishes (ElevenLabs or browser fallback).
+   * Resets busy state and restarts the mic for the next user turn.
    */
   const on_audio_ended = useCallback(() => {
     clear_reveal_timer();
     is_busy_ref.current = false;
     setStatus("listening");
-    start_stt_ref.current();
+    void start_mic_ref.current();
   }, []);
 
   /**
-   * Decodes buffered base64 audio chunks, plays them via AudioContext, and
-   * kicks off a synchronised word-by-word text reveal over the audio duration.
+   * Decodes buffered base64 TTS audio chunks, plays them via AudioContext,
+   * and synchronises the word-by-word text reveal to audio duration.
+   * Falls back to browser speechSynthesis if AudioContext decode fails.
    */
   const play_audio = useCallback(
     async (fallback_text: string) => {
@@ -176,46 +210,185 @@ export function use_voice_chat({
     [on_audio_ended]
   );
 
-  // ── Send transcript ─────────────────────────────────────────────────────────
+  // ── Mic control ─────────────────────────────────────────────────────────────
 
   /**
-   * Sends the finalised STT transcript to the backend and immediately kills the
-   * mic so it does not pick up the assistant's spoken reply.
+   * Stops recording, silence detection, and releases all mic/audio resources.
    */
-  const send_transcript = useCallback((text: string) => {
-    if (ws_ref.current?.readyState !== WebSocket.OPEN) return;
-    if (is_busy_ref.current) {
-      console.warn("[Voice] pipeline busy — dropping transcript:", text);
-      return;
+  const stop_mic = useCallback(() => {
+    if (silence_check_ref.current !== null) {
+      window.clearInterval(silence_check_ref.current);
+      silence_check_ref.current = null;
     }
-    console.log("[Voice] → sending transcript:", text);
-    is_busy_ref.current = true;
-    stop_stt_ref.current();
-    clear_reveal_timer();
-    ws_ref.current.send(
-      JSON.stringify({ type: "input_text.final", data: { text } })
-    );
-    on_user_transcript_ref.current(text);
-    setStreamingText("");
-    full_text_ref.current = "";
-    audio_chunks_ref.current = [];
-    setStatus("processing");
+    silence_start_ref.current = null;
+    analyser_ref.current = null;
+
+    if (media_recorder_ref.current?.state !== "inactive") {
+      media_recorder_ref.current?.stop();
+    }
+    media_recorder_ref.current = null;
+
+    stream_ref.current?.getTracks().forEach((t) => t.stop());
+    stream_ref.current = null;
+    audio_ctx_ref.current?.close();
+    audio_ctx_ref.current = null;
   }, []);
 
-  // ── STT ────────────────────────────────────────────────────────────────────
+  /**
+   * Sends the commit event to the backend after all pending audio chunks
+   * have been encoded and sent.  Called either immediately (no pending chunks)
+   * or deferred until the last arrayBuffer() resolves.
+   */
+  const do_commit = useCallback(() => {
+    const mime = mime_type_ref.current;
+    if (ws_ref.current?.readyState === WebSocket.OPEN) {
+      ws_ref.current.send(
+        JSON.stringify({ type: "input_audio.commit", data: { mime_type: mime } })
+      );
+    }
+    setStatus("processing");
+    // Release mic resources after commit (recorder was already stopped).
+    stream_ref.current?.getTracks().forEach((t) => t.stop());
+    stream_ref.current = null;
+    audio_ctx_ref.current?.close();
+    audio_ctx_ref.current = null;
+    media_recorder_ref.current = null;
+  }, []);
 
-  const { is_supported: is_stt_supported, is_listening, interim: interim_transcript, start: start_stt, stop: stop_stt } =
-    use_speech_recognition({ on_final_transcript: send_transcript });
+  /**
+   * Stops the MediaRecorder (flushing the last chunk) then sends
+   * input_audio.commit once all buffered chunks have been transmitted.
+   */
+  const commit_audio = useCallback(() => {
+    if (ws_ref.current?.readyState !== WebSocket.OPEN) return;
+    if (is_busy_ref.current) return;
+    is_busy_ref.current = true;
 
-  // Keep STT refs in sync so callbacks always use the latest functions.
-  useEffect(() => { start_stt_ref.current = start_stt; }, [start_stt]);
-  useEffect(() => { stop_stt_ref.current = stop_stt; }, [stop_stt]);
+    if (silence_check_ref.current !== null) {
+      window.clearInterval(silence_check_ref.current);
+      silence_check_ref.current = null;
+    }
+    silence_start_ref.current = null;
+    analyser_ref.current = null;
+
+    const recorder = media_recorder_ref.current;
+    if (recorder && recorder.state !== "inactive") {
+      // Mark that commit should fire once all pending sends drain.
+      commit_pending_ref.current = true;
+      recorder.stop();
+    } else {
+      // No active recorder — commit immediately if nothing is in flight.
+      if (pending_sends_ref.current === 0) {
+        do_commit();
+      } else {
+        commit_pending_ref.current = true;
+      }
+    }
+  }, [do_commit]);
+
+  /**
+   * Requests mic access, creates an AudioContext + AnalyserNode for silence
+   * detection, and starts a MediaRecorder that streams base64 audio chunks
+   * to the backend every CHUNK_INTERVAL_MS milliseconds.
+   */
+  const start_mic = useCallback(async () => {
+    if (is_busy_ref.current || media_recorder_ref.current) return;
+
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (err) {
+      console.error("[Voice] mic access denied:", err);
+      on_error_ref.current?.("Microphone access denied.");
+      setStatus("error");
+      return;
+    }
+
+    stream_ref.current = stream;
+    const audio_ctx = new AudioContext();
+    audio_ctx_ref.current = audio_ctx;
+    const source = audio_ctx.createMediaStreamSource(stream);
+    const analyser = audio_ctx.createAnalyser();
+    analyser.fftSize = 256;
+    source.connect(analyser);
+    analyser_ref.current = analyser;
+
+    const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+      ? "audio/webm;codecs=opus"
+      : MediaRecorder.isTypeSupported("audio/webm")
+      ? "audio/webm"
+      : "audio/mp4";
+    mime_type_ref.current = mime;
+
+    const recorder = new MediaRecorder(stream, { mimeType: mime });
+    media_recorder_ref.current = recorder;
+    recording_start_ref.current = Date.now();
+    silence_start_ref.current = null;
+    pending_sends_ref.current = 0;
+    commit_pending_ref.current = false;
+
+    recorder.ondataavailable = (e) => {
+      if (e.data.size === 0) return;
+      pending_sends_ref.current++;
+      void e.data.arrayBuffer().then((buf) => {
+        const bytes = new Uint8Array(buf);
+        // Build base64 in chunks to avoid call-stack limits on large buffers.
+        const CHUNK = 8_192;
+        let binary = "";
+        for (let i = 0; i < bytes.length; i += CHUNK) {
+          binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+        }
+        const b64 = btoa(binary);
+        pending_sends_ref.current--;
+
+        if (ws_ref.current?.readyState === WebSocket.OPEN) {
+          ws_ref.current.send(
+            JSON.stringify({ type: "input_audio.append", data: { audio: b64 } })
+          );
+        }
+
+        // If commit_audio was called while this chunk was in flight, send now.
+        if (pending_sends_ref.current === 0 && commit_pending_ref.current) {
+          commit_pending_ref.current = false;
+          do_commit();
+        }
+      });
+    };
+
+    recorder.start(CHUNK_INTERVAL_MS);
+
+    // Silence detection: poll analyser every 100ms.
+    const freq_data = new Uint8Array(analyser.frequencyBinCount);
+    silence_check_ref.current = window.setInterval(() => {
+      const an = analyser_ref.current;
+      if (!an) return;
+      an.getByteFrequencyData(freq_data);
+      const avg = freq_data.reduce((s, v) => s + v, 0) / freq_data.length;
+      const elapsed = Date.now() - recording_start_ref.current;
+
+      if (avg < SILENCE_THRESHOLD && elapsed > MIN_SPEECH_MS) {
+        if (silence_start_ref.current === null) {
+          silence_start_ref.current = Date.now();
+        } else if (Date.now() - silence_start_ref.current >= SILENCE_DURATION_MS) {
+          console.log("[Voice] silence detected — committing audio");
+          commit_audio();
+        }
+      } else {
+        silence_start_ref.current = null;
+      }
+    }, 100);
+
+    setStatus("listening");
+    console.log("[Voice] mic started, mime:", mime);
+  }, [commit_audio, do_commit]);
+
+  useEffect(() => { start_mic_ref.current = start_mic; }, [start_mic]);
+  useEffect(() => { stop_mic_ref.current = stop_mic; }, [stop_mic]);
 
   // ── WebSocket message handler ───────────────────────────────────────────────
 
   /**
-   * Processes an incoming server event from the voice WebSocket.
-   * Text deltas are buffered silently — only revealed during audio playback.
+   * Dispatches incoming server events from the voice WebSocket.
    */
   const handle_message = useCallback(
     (raw: string) => {
@@ -231,8 +404,19 @@ export function use_voice_chat({
       switch (event.type) {
         case "session.ready":
           setStatus("listening");
-          start_stt_ref.current();
+          void start_mic_ref.current();
           break;
+
+        case "user.transcript": {
+          const text = (event.data.text as string) ?? "";
+          if (text) {
+            on_user_transcript_ref.current(text);
+            setStreamingText("");
+            full_text_ref.current = "";
+            audio_chunks_ref.current = [];
+          }
+          break;
+        }
 
         case "assistant.text.delta": {
           const chunk = (event.data.text as string) ?? "";
@@ -251,7 +435,7 @@ export function use_voice_chat({
         }
 
         case "output_audio.done":
-          play_audio(full_text_ref.current);
+          void play_audio(full_text_ref.current);
           break;
 
         case "turn.done":
@@ -269,8 +453,7 @@ export function use_voice_chat({
             start_text_reveal(text, Math.max(word_count * 120, 500));
             speak_fallback(text, on_audio_ended);
           } else {
-            const display = `[${code}] ${msg}`;
-            on_error_ref.current?.(display);
+            on_error_ref.current?.(`[${code}] ${msg}`);
             setStatus("error");
           }
           break;
@@ -286,7 +469,7 @@ export function use_voice_chat({
   // ── Connect / disconnect ────────────────────────────────────────────────────
 
   /**
-   * Opens the voice WebSocket for the given conversation id and token.
+   * Opens the voice WebSocket for the given conversation id.
    * On session.ready the mic starts automatically.
    */
   const connect = useCallback(
@@ -322,28 +505,27 @@ export function use_voice_chat({
   );
 
   /**
-   * Closes the WebSocket, stops the mic, cancels any ongoing audio/reveal.
+   * Closes the WebSocket, stops the mic, cancels audio playback and text reveal.
    */
   const disconnect = useCallback(() => {
     window.speechSynthesis.cancel();
     clear_reveal_timer();
-    stop_stt();
+    stop_mic();
     ws_ref.current?.close();
     ws_ref.current = null;
     is_busy_ref.current = false;
     audio_chunks_ref.current = [];
     setStatus("disconnected");
     setStreamingText("");
-  }, [stop_stt]);
+  }, [stop_mic]);
 
-  // Disconnect on unmount.
   useEffect(() => disconnect, [disconnect]);
 
   return {
     status,
     streaming_text,
     is_stt_supported,
-    interim_transcript: is_listening ? interim_transcript : "",
+    interim_transcript: "",
     connect,
     disconnect,
   };
