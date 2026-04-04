@@ -12,6 +12,7 @@ from app.models.base import Base
 
 if TYPE_CHECKING:
     from app.models.conversation import Conversation
+    from app.models.user_profile import UserProfile
 
 
 class User(Base):
@@ -24,3 +25,4 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     conversations: Mapped[list[Conversation]] = relationship("Conversation", back_populates="user")
+    profile: Mapped[UserProfile | None] = relationship("UserProfile", back_populates="user", uselist=False)
