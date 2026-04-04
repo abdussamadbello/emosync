@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1 import assessments, auth, chat, health, mood, profile, voice
+from app.api.v1 import assessments, auth, calendar, chat, health, journal, mood, profile, voice
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(health.router)
@@ -10,3 +10,5 @@ api_router.include_router(voice.router)
 api_router.include_router(assessments.router)
 api_router.include_router(mood.router)
 api_router.include_router(profile.router)
+api_router.include_router(journal.router)
+api_router.include_router(calendar.router)
