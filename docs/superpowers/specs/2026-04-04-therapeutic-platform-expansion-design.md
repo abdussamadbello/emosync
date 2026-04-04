@@ -281,25 +281,31 @@ Events with `recurrence` set generate virtual instances. The query endpoint acce
 
 ---
 
-## 7. MCP Server Integration
+## 7. Data Access Patterns
 
-The agent (Historian node) accesses all therapeutic data through MCP tool calls. This keeps the agent pipeline decoupled from the data layer.
+Two distinct access patterns depending on whether the agent needs semantic search capabilities.
 
 ### 7.1 Architecture
 
 ```
-Frontend (user CRUD)          Agent (Historian)
+Frontend (user)               Agent (Historian)
      │                             │
-     ▼                             ▼
- REST API endpoints          MCP Tool Calls
- (Create, Update, Delete)    (Read-only queries)
+     ▼                             ├── MCP Tool Calls (semantic search)
+ REST API endpoints                │   Journal: search, recent, get_by_id
+ (Full CRUD for all domains)       │   Calendar: get_upcoming, get_triggers, get_by_date
+     │                             │
+     │                             └── Direct DB Queries (simple reads)
+     │                                 Profile, Assessments, Treatment Plans,
+     │                                 Mood Logs
      │                             │
      └──────────┬──────────────────┘
                 ▼
        PostgreSQL tables
 ```
 
-### 7.2 MCP servers and tools
+### 7.2 MCP servers (Journal + Calendar only)
+
+Journal and Calendar use MCP because the agent needs **semantic search** (pgvector) and **recurrence expansion** — capabilities beyond simple CRUD reads.
 
 **Journal MCP Server** (`backend/app/mcp/journal/`)
 
@@ -317,36 +323,7 @@ Frontend (user CRUD)          Agent (Historian)
 | `calendar.get_triggers` | user_id, days | Only anniversary/trigger type events nearby |
 | `calendar.get_by_date` | user_id, date | Events on a specific date |
 
-**Assessment MCP Server** (`backend/app/mcp/assessment/` — new)
-
-| Tool | Parameters | Returns |
-|------|-----------|---------|
-| `assessment.get_latest` | user_id, instrument | Most recent assessment + score + severity |
-| `assessment.get_history` | user_id, instrument, limit | Last N assessments for trend |
-
-**Treatment MCP Server** (`backend/app/mcp/treatment/` — new)
-
-| Tool | Parameters | Returns |
-|------|-----------|---------|
-| `treatment.get_active_plan` | user_id | Active plan with all goals and progress |
-| `treatment.get_goal_status` | goal_id | Single goal with progress notes |
-
-**Mood MCP Server** (`backend/app/mcp/mood/` — new)
-
-| Tool | Parameters | Returns |
-|------|-----------|---------|
-| `mood.get_recent` | user_id, limit | Last N mood logs |
-| `mood.get_trend` | user_id, days | Average score, direction (up/down/stable) |
-
-**Profile MCP Server** (`backend/app/mcp/profile/` — new)
-
-| Tool | Parameters | Returns |
-|------|-----------|---------|
-| `profile.get` | user_id | Grief type, preferences, support system, onboarding data |
-
-### 7.3 Implementation pattern
-
-Each MCP server follows the same structure:
+**Implementation pattern:**
 
 ```
 backend/app/mcp/{domain}/
@@ -356,7 +333,16 @@ backend/app/mcp/{domain}/
 └── tools.py        # MCP tool definitions (name, description, parameters, handler)
 ```
 
-The Historian calls MCP tools via a unified interface. Each tool handler calls the service layer, which calls the repository, which queries PostgreSQL.
+### 7.3 Direct DB access (Profile, Assessments, Treatment Plans, Mood)
+
+These domains are standard CRUD — the agent reads them via direct SQLAlchemy queries in the Historian node. No MCP layer needed.
+
+**Profile** — `SELECT * FROM user_profiles WHERE user_id = :uid`
+**Assessments** — `SELECT * FROM assessments WHERE user_id = :uid ORDER BY created_at DESC LIMIT 1`
+**Treatment Plans** — `SELECT plan + goals WHERE user_id = :uid AND status = 'active'`
+**Mood Logs** — `SELECT * FROM mood_logs WHERE user_id = :uid ORDER BY created_at DESC LIMIT :n`
+
+These queries live in a shared repository module (`backend/app/services/therapeutic_context.py`) that the Historian imports and calls directly via `asyncio.gather`.
 
 ---
 
@@ -389,20 +375,21 @@ class AgentState(TypedDict, total=False):
 The Historian node expands from 2 parallel operations to 7:
 
 ```python
-# Journal via MCP (replaces direct pgvector query)
+# MCP tool calls (semantic search / recurrence expansion)
 journal_results = await mcp.call("journal.search", user_id=uid, query=msg)
-# CBT chunks stay as direct pgvector query (static knowledge base, not user data)
+events = await mcp.call("calendar.get_upcoming", user_id=uid, days=7)
+
+# Direct pgvector query (static knowledge base)
 cbt_results = await retriever.search(embedding, sources=("cbt_pdf",))
 
-# New MCP calls (all run in parallel via asyncio.gather)
-profile = await mcp.call("profile.get", user_id=uid)
-assessment = await mcp.call("assessment.get_latest", user_id=uid, instrument="phq9")
-plan = await mcp.call("treatment.get_active_plan", user_id=uid)
-moods = await mcp.call("mood.get_recent", user_id=uid, limit=7)
-events = await mcp.call("calendar.get_upcoming", user_id=uid, days=7)
+# Direct DB queries via therapeutic_context repository
+profile = await therapeutic_ctx.get_profile(uid)
+assessment = await therapeutic_ctx.get_latest_assessment(uid, "phq9")
+plan = await therapeutic_ctx.get_active_plan(uid)
+moods = await therapeutic_ctx.get_recent_moods(uid, limit=7)
 ```
 
-The Historian's LLM prompt expands to include all this context in its briefing.
+All 7 calls run in parallel via `asyncio.gather`. The Historian's LLM prompt expands to include all this context in its briefing.
 
 ### 8.3 Specialist changes
 
@@ -543,11 +530,8 @@ When the Specialist includes `[suggest:...]` tags, the frontend strips them from
 ### Phase 3 — Treatment Plans & Outcomes
 - Treatment plan + goal CRUD API endpoints
 - Mood trend endpoint
-- Assessment MCP server (get_latest, get_history tools)
-- Treatment MCP server (get_active_plan, get_goal_status tools)
-- Mood MCP server (get_recent, get_trend tools)
-- Profile MCP server (get tool)
-- Expand Historian to call all MCP tools
+- Therapeutic context repository (`backend/app/services/therapeutic_context.py`) for direct DB reads (profile, assessments, plans, moods)
+- Expand Historian to call MCP tools (journal, calendar) + direct DB queries (profile, assessments, plans, moods)
 - Expand Specialist prompt with assessment/plan/mood awareness
 - Expand Anchor with score-aware escalation + calendar sensitivity
 - Implement [suggest:...] tag system in Specialist
