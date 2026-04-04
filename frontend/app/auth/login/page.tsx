@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
 import { Button } from "@/components/ui/button";
@@ -21,11 +21,14 @@ import {
  */
 export default function LoginPage() {
   const router = useRouter();
+  const search_params = useSearchParams();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [show_password, setShowPassword] = useState(false);
   const [is_loading, setIsLoading] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState(
+    search_params.get("expired") ? "Your session has expired. Please sign in again." : ""
+  );
   const [is_checking_auth, setIsCheckingAuth] = useState(true);
 
   useEffect(() => {

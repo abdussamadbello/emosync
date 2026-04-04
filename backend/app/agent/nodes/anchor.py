@@ -6,6 +6,7 @@ validation, and emotional-pacing criteria before reaching the user.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -17,6 +18,8 @@ from app.agent.state import AgentState
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+LLM_TIMEOUT_SECONDS = 30.0
 
 
 def _build_anchor_prompt(state: AgentState) -> str:
@@ -55,15 +58,19 @@ async def anchor_node(state: AgentState) -> dict[str, Any]:
     prompt = _build_anchor_prompt(state)
     messages = [SystemMessage(content=ANCHOR_SYSTEM), HumanMessage(content=prompt)]
 
+    passthrough = state.get(
+        "specialist_response",
+        "I'm here with you. What you're feeling matters. "
+        "Would you like to share more about what's going on?",
+    )
     try:
-        response = await llm.ainvoke(messages)
+        response = await asyncio.wait_for(llm.ainvoke(messages), timeout=LLM_TIMEOUT_SECONDS)
         final_response = response.content
+    except asyncio.TimeoutError:
+        logger.error("Anchor LLM call timed out after %ss; passing through Specialist response.", LLM_TIMEOUT_SECONDS)
+        final_response = passthrough
     except Exception:
         logger.exception("Anchor LLM call failed; passing through Specialist response.")
-        final_response = state.get(
-            "specialist_response",
-            "I'm here with you. What you're feeling matters. "
-            "Would you like to share more about what's going on?",
-        )
+        final_response = passthrough
 
     return {"final_response": final_response}

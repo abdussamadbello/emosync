@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
-from typing import Any, List
-import numpy as np
+import os
+from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -13,47 +14,63 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from app.agent.prompts import HISTORIAN_SYSTEM
 from app.agent.state import AgentState
 from app.core.config import settings
-
 from app.mcp.journal.embedding import Embedder
 from app.ingestion.vector_retriever import VectorRetriever
 
-
-
-# For vector store querying
-import os
-import json as js
-
 logger = logging.getLogger(__name__)
 
+LLM_TIMEOUT_SECONDS = 30.0
 VECTOR_STORE_PATH = os.path.join("backend", "data", "vector_store.json")
 
+_vector_store_warned = False
 
-def load_vector_store() -> List[dict]:
-    """Load chunks + embeddings from the vector store."""
+
+async def retrieve_relevant_chunks(query: str, top_k: int = 5) -> list[str]:
+    """Return top-K semantically relevant chunks from the CBT vector store."""
+    global _vector_store_warned
+
     if not os.path.exists(VECTOR_STORE_PATH):
-        return []
-    with open(VECTOR_STORE_PATH, "r", encoding="utf-8") as f:
-        return js.load(f)
-
-
-def retrieve_relevant_chunks(query: str, top_k: int = 5) -> List[str]:
-    """Return top-K chunks from the vector store for the current query."""
-    store = load_vector_store()
-    if not store:
+        if not _vector_store_warned:
+            logger.warning("Vector store not found at %s — CBT context unavailable.", VECTOR_STORE_PATH)
+            _vector_store_warned = True
         return []
 
-    
+    try:
+        retriever = VectorRetriever(path=VECTOR_STORE_PATH)
+    except (FileNotFoundError, json.JSONDecodeError):
+        logger.warning("Failed to load vector store at %s.", VECTOR_STORE_PATH)
+        return []
 
-    query_emb = np.array([0.0] * len(store[0]["embedding"]))  # placeholder if needed
-    # Use the correct key — e.g., "content" or "chunk"
-    key_name = "content" if "content" in store[0] else "chunk"
-    
-    # For now, simple retrieval: just take top_k chunks (later we can do similarity search)
-    chunks = [item[key_name] for item in store[:top_k]]
-    return chunks
+    if not retriever.store:
+        return []
+
+    try:
+        embedder = Embedder()
+        query_embedding = await embedder.embed(query)
+        results = retriever.search(query_embedding, top_k=top_k)
+        return [item["content"] for item in results if item.get("content")]
+    except Exception:
+        logger.exception("Semantic retrieval failed; falling back to naive top-k.")
+        key_name = "content" if "content" in retriever.store[0] else "chunk"
+        return [item[key_name] for item in retriever.store[:top_k] if item.get(key_name)]
 
 
-def _build_historian_prompt(state: AgentState, query_chunks: List[str]) -> str:
+async def retrieve_journal_context(user_message: str) -> list[dict]:
+    """Retrieve journal entries semantically relevant to the user's message."""
+    try:
+        embedder = Embedder()
+        retriever = VectorRetriever()
+        query_embedding = await embedder.embed(user_message)
+        return retriever.search(query_embedding)
+    except FileNotFoundError:
+        logger.debug("Vector store not found for journal context.")
+        return []
+    except Exception:
+        logger.exception("Journal context retrieval failed.")
+        return []
+
+
+def _build_historian_prompt(state: AgentState, query_chunks: list[str]) -> str:
     """Build the user-facing prompt for the Historian with available context."""
     parts: list[str] = []
 
@@ -102,13 +119,16 @@ def _build_historian_prompt(state: AgentState, query_chunks: List[str]) -> str:
 
     return "\n".join(parts)
 
-# Real semantic retrieval for journal context
-async def retrieve_journal_context(user_message: str):
-    embedder = Embedder()
-    retriever = VectorRetriever()
-    query_embedding = await embedder.embed(user_message)
-    results = retriever.search(query_embedding)
-    return results
+
+def _extract_json_from_llm_response(content: str) -> dict:
+    """Extract JSON from an LLM response that may be wrapped in markdown fences."""
+    if "```json" in content:
+        json_str = content.split("```json", 1)[1].split("```", 1)[0].strip()
+        return json.loads(json_str)
+    if "```" in content:
+        json_str = content.split("```", 1)[1].split("```", 1)[0].strip()
+        return json.loads(json_str)
+    return json.loads(content.strip())
 
 
 async def historian_node(state: AgentState) -> dict[str, Any]:
@@ -120,8 +140,8 @@ async def historian_node(state: AgentState) -> dict[str, Any]:
         for item in journal_results
     ]
 
-    # Retrieve relevant CBT chunks
-    query_chunks = retrieve_relevant_chunks(state.get("user_message", ""), top_k=5)
+    # Retrieve relevant CBT chunks via semantic search.
+    query_chunks = await retrieve_relevant_chunks(state.get("user_message", ""), top_k=5)
 
     llm = ChatGoogleGenerativeAI(
         model="gemini-2.5-flash-lite",
@@ -132,31 +152,32 @@ async def historian_node(state: AgentState) -> dict[str, Any]:
     prompt = _build_historian_prompt(state, query_chunks)
     messages = [SystemMessage(content=HISTORIAN_SYSTEM), HumanMessage(content=prompt)]
 
+    response_content: str | None = None
     try:
-        response = await llm.ainvoke(messages)
+        response = await asyncio.wait_for(llm.ainvoke(messages), timeout=LLM_TIMEOUT_SECONDS)
         content = response.content
-
-        # Remove markdown code fences
-        if isinstance(content, str) and "```" in content:
-            content = content.split("```")[1]
-            if content.startswith("json"):
-                content = content[4:]
+        response_content = content if isinstance(content, str) else str(content)
 
         if isinstance(content, str):
-            briefing = json.loads(content.strip())
+            briefing = _extract_json_from_llm_response(content)
         elif isinstance(content, list) and content and isinstance(content[0], str):
-            briefing = json.loads(content[0].strip())
+            briefing = _extract_json_from_llm_response(content[0])
         else:
-            # Fallback: cannot parse, use default
             briefing = {
                 "date_insights": "No specific date context identified.",
                 "journal_insights": str(content),
             }
-    except (json.JSONDecodeError, IndexError):
+    except asyncio.TimeoutError:
+        logger.error("Historian LLM call timed out after %ss.", LLM_TIMEOUT_SECONDS)
+        briefing = {
+            "date_insights": "Context unavailable (timeout).",
+            "journal_insights": "Context unavailable (timeout).",
+        }
+    except (json.JSONDecodeError, IndexError, ValueError):
         logger.warning("Historian returned non-JSON; using raw text as insights.")
         briefing = {
             "date_insights": "No specific date context identified.",
-            "journal_insights": response.content if "response" in dir() else "No journal context available.",
+            "journal_insights": response_content or "No journal context available.",
         }
     except Exception:
         logger.exception("Historian LLM call failed; continuing with empty context.")

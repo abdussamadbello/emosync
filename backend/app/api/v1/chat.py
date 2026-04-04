@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
@@ -148,10 +149,21 @@ async def stream_message_turn(
                         .values(updated_at=func.now())
                     )
             yield _sse("done", {"assistant_text": full})
+        except asyncio.TimeoutError:
+            logger.error("Assistant stream timed out")
+            yield _sse(
+                "error", {"code": "timeout", "message": "Response generation timed out"}
+            )
+            return
+        except HTTPException as exc:
+            yield _sse(
+                "error", {"code": str(exc.status_code), "message": exc.detail or "Request error"}
+            )
+            return
         except Exception:
             logger.exception("Assistant stream failed")
             yield _sse(
-                "error", {"code": "stream_failed", "message": "Assistant stream failed"}
+                "error", {"code": "internal_error", "message": "Unable to generate response"}
             )
             return
 

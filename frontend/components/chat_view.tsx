@@ -74,6 +74,7 @@ export function ChatView({ initial_conversation_id = null }: ChatViewProps) {
 
   // ── Text input ────────────────────────────────────────────────────────────
   const [input, setInput] = useState("");
+  const is_sending_ref = useRef(false);
 
   // ── Sidebar ───────────────────────────────────────────────────────────────
   const [sidebar_open, setSidebarOpen] = useState(true);
@@ -193,6 +194,16 @@ export function ChatView({ initial_conversation_id = null }: ChatViewProps) {
     messages_end_ref.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, is_typing]);
 
+  // Poll conversation list every 30s while tab is visible.
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      const token = get_token();
+      if (token) void load_conversations(token);
+    }, 30_000);
+    return () => clearInterval(interval);
+  }, []);
+
   // ── Conversation helpers ──────────────────────────────────────────────────
 
   /**
@@ -201,7 +212,9 @@ export function ChatView({ initial_conversation_id = null }: ChatViewProps) {
   async function load_conversations(token: string) {
     try {
       setConversations(await list_conversations(token));
-    } catch { /* sidebar list stays empty */ }
+    } catch (err) {
+      console.error("Failed to load conversations:", err);
+    }
   }
 
   /**
@@ -215,8 +228,10 @@ export function ChatView({ initial_conversation_id = null }: ChatViewProps) {
       const conv = await create_conversation(token);
       setConversationId(conv.id);
       window.history.replaceState(null, "", `/c/${conv.id}`);
+      void load_conversations(token);
       return conv.id;
-    } catch {
+    } catch (err) {
+      console.error("Failed to create conversation:", err);
       setChatError("Could not start a conversation. Please try again.");
       return null;
     }
@@ -268,7 +283,8 @@ export function ChatView({ initial_conversation_id = null }: ChatViewProps) {
    */
   async function handle_send() {
     const trimmed = input.trim();
-    if (!trimmed || is_typing) return;
+    if (!trimmed || is_typing || is_sending_ref.current) return;
+    is_sending_ref.current = true;
 
     setChatError(null);
     const token = get_token();
@@ -286,6 +302,7 @@ export function ChatView({ initial_conversation_id = null }: ChatViewProps) {
           },
         ]);
         setIsTyping(false);
+        is_sending_ref.current = false;
       }, 800);
       return;
     }
@@ -294,7 +311,7 @@ export function ChatView({ initial_conversation_id = null }: ChatViewProps) {
     setIsTyping(true);
 
     const active_id = await ensure_active_conversation(token);
-    if (!active_id) { setInput(trimmed); setIsTyping(false); return; }
+    if (!active_id) { setInput(trimmed); setIsTyping(false); is_sending_ref.current = false; return; }
 
     setMessages((prev) => [
       ...prev,
@@ -302,9 +319,14 @@ export function ChatView({ initial_conversation_id = null }: ChatViewProps) {
       { role: "assistant", content: "" },
     ]);
 
+    // Timeout guard: if no SSE event arrives within 60s, abort.
+    const abort = new AbortController();
+    const timeout_id = setTimeout(() => abort.abort(), 60_000);
+
     try {
       const response = await stream_message(token, active_id, trimmed);
       for await (const evt of read_sse_stream(response)) {
+        if (abort.signal.aborted) break;
         if (evt.event === "token") {
           const fragment = (evt.data.text as string) ?? "";
           setMessages((prev) => {
@@ -319,21 +341,26 @@ export function ChatView({ initial_conversation_id = null }: ChatViewProps) {
             return updated;
           });
         } else if (evt.event === "done") {
-          setIsTyping(false);
           void load_conversations(token);
         } else if (evt.event === "error") {
           const msg = (evt.data.message as string) ?? "Assistant error";
           clear_pending_assistant_message();
           setChatError(msg);
-          setIsTyping(false);
         }
+      }
+      if (abort.signal.aborted) {
+        clear_pending_assistant_message();
+        setChatError("Response timed out. Please try again.");
       }
     } catch (err) {
       const msg =
         err instanceof Error ? err.message : "Failed to reach the server.";
       clear_pending_assistant_message();
       setChatError(msg);
+    } finally {
+      clearTimeout(timeout_id);
       setIsTyping(false);
+      is_sending_ref.current = false;
     }
   }
 
@@ -551,6 +578,7 @@ export function ChatView({ initial_conversation_id = null }: ChatViewProps) {
                         ? "Start voice chat"
                         : "Voice chat requires microphone access"
                     }
+                    aria-label="Start voice chat"
                     className="size-8 shrink-0 text-muted-foreground hover:text-foreground"
                   >
                     <Mic className="size-4" />
@@ -559,6 +587,7 @@ export function ChatView({ initial_conversation_id = null }: ChatViewProps) {
                     size="icon"
                     onClick={() => void handle_send()}
                     disabled={!input.trim() || is_typing}
+                    aria-label="Send message"
                     className="size-8 shrink-0"
                   >
                     <Send className="size-4" />

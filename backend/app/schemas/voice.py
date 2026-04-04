@@ -16,6 +16,7 @@ ClientEventType = Literal[
 
 ServerEventType = Literal[
     "session.ready",
+    "user.transcript",
     "assistant.text.delta",
     "assistant.text.done",
     "output_audio.chunk",

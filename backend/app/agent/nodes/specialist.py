@@ -6,6 +6,7 @@ a therapeutically grounded response.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -17,6 +18,8 @@ from app.agent.state import AgentState
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+LLM_TIMEOUT_SECONDS = 30.0
 
 
 def _build_specialist_prompt(state: AgentState) -> str:
@@ -59,15 +62,19 @@ async def specialist_node(state: AgentState) -> dict[str, Any]:
     prompt = _build_specialist_prompt(state)
     messages = [SystemMessage(content=SPECIALIST_SYSTEM), HumanMessage(content=prompt)]
 
+    fallback = (
+        "I hear you, and I want you to know that what you're feeling is completely valid. "
+        "I'm having a moment of difficulty on my end, but I'm still here with you. "
+        "Would you like to tell me more about what's on your mind?"
+    )
     try:
-        response = await llm.ainvoke(messages)
+        response = await asyncio.wait_for(llm.ainvoke(messages), timeout=LLM_TIMEOUT_SECONDS)
         specialist_response = response.content
+    except asyncio.TimeoutError:
+        logger.error("Specialist LLM call timed out after %ss.", LLM_TIMEOUT_SECONDS)
+        specialist_response = fallback
     except Exception:
         logger.exception("Specialist LLM call failed.")
-        specialist_response = (
-            "I hear you, and I want you to know that what you're feeling is completely valid. "
-            "I'm having a moment of difficulty on my end, but I'm still here with you. "
-            "Would you like to tell me more about what's on your mind?"
-        )
+        specialist_response = fallback
 
     return {"specialist_response": specialist_response}

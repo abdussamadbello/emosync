@@ -79,6 +79,16 @@ export async function login_user(
 }
 
 /**
+ * Checks for 401 responses and redirects to login if token expired.
+ */
+function handle_auth_error(res: Response): void {
+  if (res.status === 401 && typeof window !== "undefined") {
+    clear_auth();
+    window.location.href = "/auth/login?expired=1";
+  }
+}
+
+/**
  * Fetches the current user profile using the given JWT.
  * Throws a human-readable Error on failure.
  */
@@ -88,6 +98,7 @@ export async function get_current_user(token: string): Promise<UserOut> {
   });
 
   if (!res.ok) {
+    handle_auth_error(res);
     throw new Error(`Failed to fetch user profile (${res.status})`);
   }
 
@@ -175,6 +186,7 @@ export async function create_conversation(
   });
 
   if (!res.ok) {
+    handle_auth_error(res);
     const body: ApiError = await res.json().catch(() => ({}));
     throw new Error(body.detail ?? `Failed to create conversation (${res.status})`);
   }
@@ -193,6 +205,7 @@ export async function list_conversations(
   });
 
   if (!res.ok) {
+    handle_auth_error(res);
     const body: ApiError = await res.json().catch(() => ({}));
     throw new Error(body.detail ?? `Failed to fetch conversations (${res.status})`);
   }
@@ -213,6 +226,7 @@ export async function list_messages(
   );
 
   if (!res.ok) {
+    handle_auth_error(res);
     const body: ApiError = await res.json().catch(() => ({}));
     throw new Error(body.detail ?? `Failed to fetch messages (${res.status})`);
   }
@@ -243,6 +257,7 @@ export async function stream_message(
   );
 
   if (!res.ok) {
+    handle_auth_error(res);
     const body: ApiError = await res.json().catch(() => ({}));
     throw new Error(body.detail ?? `Stream request failed (${res.status})`);
   }

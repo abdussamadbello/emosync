@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import base64
+import binascii
+import logging
 import uuid
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
@@ -18,6 +21,8 @@ from app.services.realtime.orchestrator import VoiceOrchestrator
 from app.services.stt.elevenlabs_stt import build_stt_service
 from app.services.tts.elevenlabs import build_tts_service
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(tags=["voice"])
 
 
@@ -31,38 +36,52 @@ def _extract_bearer_token(websocket: WebSocket) -> str | None:
     return None
 
 
-async def _resolve_socket_user(websocket: WebSocket) -> User | None:
-    token = _extract_bearer_token(websocket)
-    if not token:
-        return None
-
+async def _resolve_token(token: str) -> User | None:
+    """Validate a JWT token and return the User, or None."""
     user_id = decode_access_token(token)
     if user_id is None:
         return None
-
     try:
         uid = uuid.UUID(user_id)
     except ValueError:
         return None
-
     async with SessionLocal() as session:
         return await session.get(User, uid)
 
 
+async def _resolve_socket_user(websocket: WebSocket) -> User | None:
+    token = _extract_bearer_token(websocket)
+    if not token:
+        return None
+    return await _resolve_token(token)
+
+
 @router.websocket("/voice/ws/{conversation_id}")
 async def voice_ws(websocket: WebSocket, conversation_id: uuid.UUID) -> None:
+    # Try query-param/header auth first (legacy). If absent, accept and wait
+    # for an "auth" message as the first frame (preferred, avoids token in URL).
     user = await _resolve_socket_user(websocket)
+
     if user is None:
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-        return
+        await websocket.accept()
+        try:
+            raw = await asyncio.wait_for(websocket.receive_json(), timeout=5.0)
+            if raw.get("type") == "auth" and isinstance(raw.get("data"), dict):
+                token = raw["data"].get("token", "")
+                user = await _resolve_token(token)
+        except (asyncio.TimeoutError, Exception):
+            pass
+        if user is None:
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+    else:
+        await websocket.accept()
 
     async with SessionLocal() as session:
         conv = await session.get(Conversation, conversation_id)
         if conv is None or conv.user_id != user.id:
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             return
-
-    await websocket.accept()
     await websocket.send_json(VoiceServerEvent(type="session.ready", data={"conversation_id": str(conversation_id)}).model_dump())
 
     orchestrator = VoiceOrchestrator(tts_service=build_tts_service())
@@ -85,7 +104,20 @@ async def voice_ws(websocket: WebSocket, conversation_id: uuid.UUID) -> None:
             if event.type == "input_audio.append":
                 raw_audio = event.data.get("audio", "")
                 if raw_audio:
-                    audio_buffer.append(base64.b64decode(raw_audio))
+                    try:
+                        decoded = base64.b64decode(raw_audio)
+                    except (binascii.Error, ValueError):
+                        await websocket.send_json(
+                            VoiceServerEvent(type="error", data={"code": "invalid_audio", "message": "Invalid audio encoding."}).model_dump()
+                        )
+                        continue
+                    try:
+                        audio_buffer.append(decoded)
+                    except ValueError:
+                        audio_buffer.reset()
+                        await websocket.send_json(
+                            VoiceServerEvent(type="error", data={"code": "audio_buffer_overflow", "message": "Audio too long. Please try a shorter message."}).model_dump()
+                        )
                 continue
 
             if event.type == "input_audio.commit":
@@ -116,40 +148,39 @@ async def voice_ws(websocket: WebSocket, conversation_id: uuid.UUID) -> None:
                 )
                 continue
 
-            async with SessionLocal() as session:
-                user_message = Message(conversation_id=conversation_id, role="user", content=transcript)
-                session.add(user_message)
-                await session.flush()
+            # Send transcript back to client so user sees their own words.
+            await websocket.send_json(
+                VoiceServerEvent(type="user.transcript", data={"text": transcript}).model_dump()
+            )
 
+            # Load conversation history for agent context (read-only).
+            async with SessionLocal() as session:
                 history_result = await session.execute(
                     select(Message)
                     .where(Message.conversation_id == conversation_id)
                     .order_by(Message.created_at.asc())
                 )
                 history = [{"role": m.role, "content": m.content} for m in history_result.scalars().all()]
-                await session.commit()
 
+            # Generate assistant response via agent pipeline.
+            user_message_id = uuid.uuid4()
             assistant_text = ""
             async for server_event in orchestrator.stream_transcript_turn(
                 transcript=transcript,
                 conversation_id=conversation_id,
-                user_message_id=user_message.id,
+                user_message_id=user_message_id,
                 conversation_history=history,
             ):
                 if server_event.type == "assistant.text.delta":
                     assistant_text += server_event.data.get("text", "")
                 await websocket.send_json(server_event.model_dump())
 
-            if assistant_text:
-                async with SessionLocal() as session:
-                    session.add(
-                        Message(
-                            conversation_id=conversation_id,
-                            role="assistant",
-                            content=assistant_text,
-                        )
-                    )
-                    await session.commit()
+            # Save both messages atomically after successful response.
+            async with SessionLocal() as session:
+                async with session.begin():
+                    session.add(Message(conversation_id=conversation_id, role="user", content=transcript))
+                    if assistant_text:
+                        session.add(Message(conversation_id=conversation_id, role="assistant", content=assistant_text))
 
     except WebSocketDisconnect:
         return

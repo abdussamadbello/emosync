@@ -1,4 +1,11 @@
+import logging
+
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
+
+_INSECURE_DEFAULT_SECRET = "change-me-in-production"
 
 
 class Settings(BaseSettings):
@@ -32,9 +39,25 @@ class Settings(BaseSettings):
     voice_session_idle_timeout_seconds: int = 300
 
     # JWT auth
-    jwt_secret: str = "change-me-in-production"
+    jwt_secret: str = _INSECURE_DEFAULT_SECRET
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 60 * 24  # 24 hours
+
+    @model_validator(mode="after")
+    def _reject_insecure_jwt_secret(self) -> "Settings":
+        is_local = "localhost" in self.database_url or "127.0.0.1" in self.database_url
+        if self.jwt_secret == _INSECURE_DEFAULT_SECRET:
+            if is_local:
+                logger.warning(
+                    "Using insecure default JWT secret — acceptable for local dev only. "
+                    "Set JWT_SECRET env var before deploying."
+                )
+            else:
+                raise ValueError(
+                    "JWT_SECRET must be set to a secure random value in non-local environments. "
+                    "The default 'change-me-in-production' is not safe."
+                )
+        return self
 
     @property
     def cors_origin_list(self) -> list[str]:

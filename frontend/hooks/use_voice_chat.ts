@@ -97,6 +97,9 @@ export function use_voice_chat({
   // Busy guard: true while backend is processing or speaking
   const is_busy_ref = useRef(false);
 
+  // Track mounted state to prevent post-unmount state updates.
+  const is_mounted_ref = useRef(true);
+
   // Stable callback refs so WS handlers always call the latest versions.
   const on_user_transcript_ref = useRef(on_user_transcript);
   const on_assistant_message_ref = useRef(on_assistant_message);
@@ -199,9 +202,9 @@ export function use_voice_chat({
         src.onended = on_audio_ended;
         src.start(0);
         start_text_reveal(text, buf.duration * 1000);
-        console.log("[Voice] ElevenLabs playing —", buf.duration.toFixed(2), "s");
+
       } catch (err) {
-        console.error("[Voice] AudioContext error:", err);
+
         const word_count = text.split(/\s+/).filter(Boolean).length;
         start_text_reveal(text, Math.max(word_count * 120, 500));
         speak_fallback(fallback_text, on_audio_ended);
@@ -298,7 +301,7 @@ export function use_voice_chat({
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch (err) {
-      console.error("[Voice] mic access denied:", err);
+
       on_error_ref.current?.("Microphone access denied.");
       setStatus("error");
       return;
@@ -370,7 +373,7 @@ export function use_voice_chat({
         if (silence_start_ref.current === null) {
           silence_start_ref.current = Date.now();
         } else if (Date.now() - silence_start_ref.current >= SILENCE_DURATION_MS) {
-          console.log("[Voice] silence detected — committing audio");
+
           commit_audio();
         }
       } else {
@@ -379,7 +382,7 @@ export function use_voice_chat({
     }, 100);
 
     setStatus("listening");
-    console.log("[Voice] mic started, mime:", mime);
+
   }, [commit_audio, do_commit]);
 
   useEffect(() => { start_mic_ref.current = start_mic; }, [start_mic]);
@@ -396,10 +399,9 @@ export function use_voice_chat({
       try {
         event = JSON.parse(raw) as typeof event;
       } catch {
-        console.error("[Voice] bad JSON from server");
         return;
       }
-      console.log("[Voice WS] ←", event.type);
+
 
       switch (event.type) {
         case "session.ready":
@@ -430,7 +432,11 @@ export function use_voice_chat({
 
         case "output_audio.chunk": {
           const b64 = (event.data.audio_b64 as string) ?? "";
-          if (b64) audio_chunks_ref.current.push(b64);
+          // Cap total buffered audio at ~50MB to prevent memory exhaustion.
+          const current_size = audio_chunks_ref.current.reduce((s, c) => s + c.length, 0);
+          if (b64 && current_size + b64.length < 50_000_000) {
+            audio_chunks_ref.current.push(b64);
+          }
           break;
         }
 
@@ -445,7 +451,7 @@ export function use_voice_chat({
         case "error": {
           const code = String(event.data.code ?? "");
           const msg = String(event.data.message ?? "");
-          console.warn("[Voice WS] backend error:", code, msg);
+
           if (code === "voice_stream_failed" && full_text_ref.current) {
             setStatus("speaking");
             const text = full_text_ref.current;
@@ -483,22 +489,24 @@ export function use_voice_chat({
       is_busy_ref.current = false;
       clear_reveal_timer();
 
-      const url = `${WS_BASE}/api/v1/voice/ws/${conversation_id}?token=${encodeURIComponent(token)}`;
+      const url = `${WS_BASE}/api/v1/voice/ws/${conversation_id}`;
       const ws = new WebSocket(url);
       ws_ref.current = ws;
 
-      ws.onopen = () => console.log("[Voice WS] connected");
+      ws.onopen = () => {
+        // Send auth token as first message instead of query param.
+        ws.send(JSON.stringify({ type: "auth", data: { token } }));
+      };
       ws.onmessage = (e: MessageEvent) => handle_message(e.data as string);
       ws.onerror = () => {
-        console.error("[Voice WS] socket error");
+        if (!is_mounted_ref.current) return;
         setStatus("error");
         on_error_ref.current?.("WebSocket error — is the backend running?");
       };
       ws.onclose = () => {
-        console.log("[Voice WS] disconnected");
         ws_ref.current = null;
         is_busy_ref.current = false;
-        setStatus("disconnected");
+        if (is_mounted_ref.current) setStatus("disconnected");
       };
     },
     [handle_message]
@@ -519,7 +527,13 @@ export function use_voice_chat({
     setStreamingText("");
   }, [stop_mic]);
 
-  useEffect(() => disconnect, [disconnect]);
+  useEffect(() => {
+    is_mounted_ref.current = true;
+    return () => {
+      is_mounted_ref.current = false;
+      disconnect();
+    };
+  }, [disconnect]);
 
   return {
     status,
