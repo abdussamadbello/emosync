@@ -12,6 +12,7 @@ from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.core.security import create_access_token, hash_password, verify_password
 from app.models.user import User
+from app.models.user_profile import UserProfile
 from app.schemas.auth import LoginRequest, RegisterRequest, TokenResponse, UserOut
 
 limiter = Limiter(key_func=get_remote_address)
@@ -40,6 +41,10 @@ async def register(
     db.add(user)
     await db.commit()
     await db.refresh(user)
+
+    profile = UserProfile(user_id=user.id)
+    db.add(profile)
+    await db.commit()
 
     token = create_access_token(str(user.id))
     return {"access_token": token, "token_type": "bearer"}
