@@ -10,6 +10,7 @@ import {
   login_user,
   save_token,
   get_current_user,
+  get_profile,
   save_display_name,
   clear_auth,
   get_token,
@@ -75,7 +76,12 @@ export default function LoginPage() {
 
       save_display_name(user.display_name ?? user.email);
 
-      router.push("/");
+      const profile = await get_profile(access_token);
+      if (!profile.onboarding_completed) {
+        router.push("/onboarding");
+      } else {
+        router.push("/");
+      }
     } catch (err: unknown) {
       const msg =
         err instanceof Error ? err.message : "Login failed. Please try again.";

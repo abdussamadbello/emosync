@@ -97,7 +97,7 @@ export default function RegisterPage() {
       }
 
       save_display_name(user.display_name ?? user.email);
-      router.push("/");
+      router.push("/onboarding");
     } catch (err: unknown) {
       const msg =
         err instanceof Error ? err.message : "Registration failed. Please try again.";

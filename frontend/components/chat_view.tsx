@@ -20,12 +20,15 @@ import { VoicePanel } from "@/components/voice_panel";
 import { use_voice_chat } from "@/hooks/use_voice_chat";
 import {
   get_token,
+  get_display_name,
   clear_auth,
   create_conversation,
+  delete_conversation,
   stream_message,
   list_conversations,
   list_messages,
   get_current_user,
+  get_profile,
   save_display_name,
   type ConversationOut,
 } from "@/lib/api";
@@ -103,7 +106,7 @@ export function ChatView({ initial_conversation_id = null }: ChatViewProps) {
   /**
    * Called by the voice hook when a full assistant turn is complete.
    */
-  const handle_voice_message = useCallback((_full_text: string) => {
+  const handle_voice_message = useCallback(() => {
     voice_assistant_bubble_ref.current = "";
     setIsTyping(false);
   }, []);
@@ -115,20 +118,38 @@ export function ChatView({ initial_conversation_id = null }: ChatViewProps) {
    */
   const handle_user_transcript = useCallback((text: string) => {
     voice_assistant_bubble_ref.current = "";
+    if (!text) {
+      setMessages((prev) => {
+        const last = prev[prev.length - 1];
+        if (last?.role === "user" && last.is_voice && last.content === "…") {
+          return prev.slice(0, -1);
+        }
+        return prev;
+      });
+      return;
+    }
     const is_placeholder = text === "…";
     if (!is_placeholder) setIsTyping(true);
     setMessages((prev) => {
       const last = prev[prev.length - 1];
       const has_placeholder =
         last?.role === "user" && last.is_voice && last.content === "…";
+      const has_voice_user =
+        last?.role === "user" && last.is_voice;
       if (is_placeholder) {
         // Only add placeholder if one isn't already present.
         return has_placeholder
           ? prev
           : [...prev, { role: "user", content: "…", is_voice: true }];
       }
-      // Real transcript: replace placeholder if present, otherwise append.
+      // Real transcript: replace the active voice-user bubble in place.
       if (has_placeholder) {
+        return [
+          ...prev.slice(0, -1),
+          { role: "user", content: text, is_voice: true },
+        ];
+      }
+      if (has_voice_user) {
         return [
           ...prev.slice(0, -1),
           { role: "user", content: text, is_voice: true },
@@ -159,14 +180,43 @@ export function ChatView({ initial_conversation_id = null }: ChatViewProps) {
         setIsSessionLoading(false);
         return;
       }
+      const stored_name = get_display_name();
+      if (stored_name) {
+        setDisplayName(stored_name);
+      }
+
       try {
         const user = await get_current_user(token);
         const name = user.display_name ?? user.email;
         save_display_name(name);
         setDisplayName(name);
-        await load_conversations(token);
 
-        if (initial_conversation_id) {
+        const profile = await get_profile(token);
+        if (!profile.onboarding_completed) {
+          router.replace("/onboarding");
+          return;
+        }
+      } catch {
+        if (!get_token()) {
+          clear_auth();
+          setDisplayName(null);
+          setConversationId(null);
+          setConversations([]);
+        } else {
+          setChatError("Could not refresh your session right now. Retrying may help.");
+        }
+        setIsSessionLoading(false);
+        return;
+      }
+
+      try {
+        await load_conversations(token);
+      } catch {
+        setChatError((prev) => prev ?? "Could not load conversations right now.");
+      }
+
+      if (initial_conversation_id) {
+        try {
           const history = await list_messages(token, initial_conversation_id);
           setMessages(
             history.map((m) => ({
@@ -174,15 +224,12 @@ export function ChatView({ initial_conversation_id = null }: ChatViewProps) {
               content: m.content,
             }))
           );
+        } catch {
+          setChatError((prev) => prev ?? "Could not load this conversation right now.");
         }
-      } catch {
-        clear_auth();
-        setDisplayName(null);
-        setConversationId(null);
-        setConversations([]);
-      } finally {
-        setIsSessionLoading(false);
       }
+
+      setIsSessionLoading(false);
     }
 
     void bootstrap();
@@ -246,6 +293,28 @@ export function ChatView({ initial_conversation_id = null }: ChatViewProps) {
     setChatError(null);
     setConversationId(null);
     router.push("/");
+  }
+
+  /**
+   * Deletes a conversation and refreshes the sidebar. If the deleted
+   * conversation is the one currently open, navigates to a new chat.
+   */
+  async function handle_delete_chat(id: string) {
+    const token = get_token();
+    if (!token) return;
+    try {
+      await delete_conversation(token, id);
+      setConversations((prev) => prev.filter((c) => c.id !== id));
+      if (conversation_id === id) {
+        setMessages([]);
+        setChatError(null);
+        setConversationId(null);
+        router.push("/");
+      }
+    } catch (err) {
+      console.error("Failed to delete conversation:", err);
+      setChatError("Could not delete conversation. Please try again.");
+    }
   }
 
   /**
@@ -412,6 +481,7 @@ export function ChatView({ initial_conversation_id = null }: ChatViewProps) {
         conversations={conversations}
         active_conversation_id={conversation_id}
         on_new_chat={handle_new_chat}
+        on_delete_chat={handle_delete_chat}
       />
 
       {/* Main area */}
