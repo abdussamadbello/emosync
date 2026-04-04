@@ -88,6 +88,37 @@ function handle_auth_error(res: Response): void {
   }
 }
 
+/** Shape of the user profile response */
+export interface UserProfile {
+  id: string;
+  user_id: string;
+  grief_type: string | null;
+  grief_subject: string | null;
+  grief_duration_months: number | null;
+  support_system: string | null;
+  prior_therapy: boolean;
+  preferred_approaches: string[] | null;
+  onboarding_completed: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * Fetches the current user's profile.
+ */
+export async function get_profile(token: string): Promise<UserProfile> {
+  const res = await fetch(`${API_BASE}/api/v1/profile/me`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  if (!res.ok) {
+    handle_auth_error(res);
+    throw new Error(`Failed to fetch profile (${res.status})`);
+  }
+
+  return res.json() as Promise<UserProfile>;
+}
+
 /**
  * Fetches the current user profile using the given JWT.
  * Throws a human-readable Error on failure.
@@ -211,6 +242,28 @@ export async function list_conversations(
   }
 
   return res.json() as Promise<ConversationOut[]>;
+}
+
+/**
+ * Deletes a conversation and all its messages.
+ */
+export async function delete_conversation(
+  token: string,
+  conversation_id: string
+): Promise<void> {
+  const res = await fetch(
+    `${API_BASE}/api/v1/conversations/${conversation_id}`,
+    {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${token}` },
+    }
+  );
+
+  if (!res.ok) {
+    handle_auth_error(res);
+    const body: ApiError = await res.json().catch(() => ({}));
+    throw new Error(body.detail ?? `Failed to delete conversation (${res.status})`);
+  }
 }
 
 /**
