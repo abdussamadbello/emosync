@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { Button } from "@/components/ui/button";
@@ -19,6 +20,7 @@ import {
   LogOut,
 } from "lucide-react";
 import { type ConversationOut, clear_auth } from "@/lib/api";
+import { SearchModal } from "@/components/search_modal";
 
 interface SidebarProps {
   /** Whether the sidebar is expanded */
@@ -57,6 +59,8 @@ export function Sidebar({
   conversations = [],
   active_conversation_id,
 }: SidebarProps) {
+  const [search_open, set_search_open] = useState(false);
+
   function handle_sign_out() {
     clear_auth();
     window.location.href = "/auth/login";
@@ -64,7 +68,7 @@ export function Sidebar({
 
   return (
     <aside
-      className={`relative flex h-full flex-col border-r border-border bg-sidebar transition-all duration-300 ease-in-out ${
+      className={`relative flex h-full flex-col border-r border-border bg-sidebar text-sidebar-foreground transition-all duration-300 ease-in-out ${
         open ? "w-64" : "w-14"
       }`}
     >
@@ -81,7 +85,7 @@ export function Sidebar({
       <div className="flex h-14 items-center border-b border-border px-3">
         <Link href="/" className="flex min-w-0 items-center gap-2.5">
           <Image
-            src="/logo.png"
+            src="/logo.svg"
             alt="EmoSync"
             width={28}
             height={28}
@@ -176,12 +180,11 @@ export function Sidebar({
         <Button
           variant="ghost"
           className={`w-full justify-start gap-3 ${open ? "px-3" : "px-0 justify-center"}`}
-          asChild
+          title="Search Chats"
+          onClick={() => set_search_open(true)}
         >
-          <Link href="/search">
-            <Search className="size-4 shrink-0" />
-            {open && <span className="truncate">Search Chats</span>}
-          </Link>
+          <Search className="size-4 shrink-0" />
+          {open && <span className="truncate">Search Chats</span>}
         </Button>
 
         {/* Past chats — expanded, logged in */}
@@ -268,6 +271,9 @@ export function Sidebar({
           {open && <span className="truncate">Sign Out</span>}
         </Button>
       </div>
+
+      {/* Search Modal */}
+      <SearchModal open={search_open} on_open_change={set_search_open} />
     </aside>
   );
 }

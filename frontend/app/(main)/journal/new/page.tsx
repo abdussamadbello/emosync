@@ -71,8 +71,8 @@ export default function NewJournalEntryPage() {
   if (is_checking) return null;
 
   return (
-    <div className="min-h-screen bg-background px-4 py-8">
-      <div className="mx-auto max-w-2xl">
+    <div className="flex flex-col gap-6 p-8">
+      <div className="mx-auto max-w-2xl w-full">
         {/* Back nav */}
         <div className="mb-6">
           <Button variant="ghost" size="sm" asChild className="text-muted-foreground">

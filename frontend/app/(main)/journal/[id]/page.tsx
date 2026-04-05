@@ -135,7 +135,7 @@ export default function JournalEntryPage() {
 
   if (is_loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-background">
+      <div className="flex items-center justify-center p-8">
         <p className="text-sm text-muted-foreground">Loading entry…</p>
       </div>
     );
@@ -143,7 +143,7 @@ export default function JournalEntryPage() {
 
   if (!entry && !is_loading) {
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-background">
+      <div className="flex flex-col items-center justify-center gap-4 p-8">
         <p className="text-sm text-muted-foreground">Entry not found.</p>
         <Button asChild variant="outline" size="sm">
           <Link href="/journal">Back to Journal</Link>
@@ -153,8 +153,8 @@ export default function JournalEntryPage() {
   }
 
   return (
-    <div className="min-h-screen bg-background px-4 py-8">
-      <div className="mx-auto max-w-2xl">
+    <div className="flex flex-col gap-6 p-8">
+      <div className="mx-auto max-w-2xl w-full">
         {/* Back nav */}
         <div className="mb-6 flex items-center justify-between">
           <Button variant="ghost" size="sm" asChild className="text-muted-foreground">

@@ -74,15 +74,15 @@ export default function JournalPage() {
 
   if (is_loading && entries.length === 0) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-background">
+      <div className="flex items-center justify-center p-8">
         <p className="text-sm text-muted-foreground">Loading journal…</p>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-background px-4 py-8">
-      <div className="mx-auto max-w-2xl">
+    <div className="flex flex-col gap-8 p-8">
+      <div className="mx-auto max-w-2xl w-full">
         {/* Header */}
         <div className="mb-6 flex items-center justify-between">
           <div className="flex items-center gap-2.5">

@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <defs>
+    <linearGradient id="heartGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#E57373"/>
+      <stop offset="100%" stop-color="#D32F2F"/>
+    </linearGradient>
+    <linearGradient id="waveGrad" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#81D4FA"/>
+      <stop offset="50%" stop-color="#4FC3F7"/>
+      <stop offset="100%" stop-color="#29B6F6"/>
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  
+  <!-- Background circle -->
+  <circle cx="256" cy="256" r="240" fill="#FFF5F5"/>
+  
+  <!-- Heart shape with gradient -->
+  <path d="M256 380 
+           C180 320 120 270 120 200 
+           C120 140 170 100 230 100 
+           C245 100 256 110 256 110 
+           C256 110 267 100 282 100 
+           C342 100 392 140 392 200 
+           C392 270 332 320 256 380Z" 
+        fill="url(#heartGrad)" 
+        filter="url(#glow)"/>
+  
+  <!-- Sound wave lines emanating from heart -->
+  <g stroke="url(#waveGrad)" stroke-width="8" stroke-linecap="round" fill="none" opacity="0.9">
+    <path d="M256 70 Q290 50 320 70" />
+    <path d="M256 60 Q300 35 340 60" />
+    <path d="M256 50 Q310 20 360 50" />
+  </g>
+  
+  <!-- Subtle connection dots -->
+  <circle cx="180" cy="140" r="6" fill="#81D4FA"/>
+  <circle cx="332" cy="140" r="6" fill="#81D4FA"/>
+  <circle cx="140" cy="200" r="4" fill="#E57373" opacity="0.5"/>
+  <circle cx="372" cy="200" r="4" fill="#E57373" opacity="0.5"/>
+</svg>

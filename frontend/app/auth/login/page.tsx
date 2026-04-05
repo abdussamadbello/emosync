@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { Suspense, useState, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
@@ -20,7 +20,7 @@ import {
 /**
  * Renders the login form with email and password fields wired to the backend.
  */
-export default function LoginPage() {
+function LoginForm() {
   const router = useRouter();
   const search_params = useSearchParams();
   const [email, setEmail] = useState("");
@@ -246,3 +246,4 @@ export default function LoginPage() {
     </div>
   );
 }
+export default function LoginPage() { return <Suspense fallback={null}><LoginForm /></Suspense>; }
