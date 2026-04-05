@@ -5,73 +5,107 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_google_genai import ChatGoogleGenerativeAI
 
+from app.agent.llm import get_historian_llm
 from app.agent.prompts import HISTORIAN_SYSTEM
 from app.agent.state import AgentState
 from app.core.config import settings
+from app.mcp.calendar.service import CalendarService
 from app.mcp.journal.embedding import Embedder
 from app.ingestion.vector_retriever import VectorRetriever
 
 logger = logging.getLogger(__name__)
 
 LLM_TIMEOUT_SECONDS = 30.0
-VECTOR_STORE_PATH = os.path.join("backend", "data", "vector_store.json")
-
-_vector_store_warned = False
 
 
-async def retrieve_relevant_chunks(query: str, top_k: int = 5) -> list[str]:
-    """Return top-K semantically relevant chunks from the CBT vector store."""
-    global _vector_store_warned
-
-    if not os.path.exists(VECTOR_STORE_PATH):
-        if not _vector_store_warned:
-            logger.warning("Vector store not found at %s — CBT context unavailable.", VECTOR_STORE_PATH)
-            _vector_store_warned = True
-        return []
-
-    try:
-        retriever = VectorRetriever(path=VECTOR_STORE_PATH)
-    except (FileNotFoundError, json.JSONDecodeError):
-        logger.warning("Failed to load vector store at %s.", VECTOR_STORE_PATH)
-        return []
-
-    if not retriever.store:
-        return []
-
+async def _embed_user_message(user_message: str) -> list[float] | None:
+    """Embed the user message once for reuse across retrievals."""
+    if not user_message.strip():
+        return None
     try:
         embedder = Embedder()
-        query_embedding = await embedder.embed(query)
-        results = retriever.search(query_embedding, top_k=top_k)
+        return await embedder.embed(user_message)
+    except Exception:
+        logger.exception("Failed to embed user message.")
+        return None
+
+
+async def retrieve_relevant_chunks(
+    query: str, top_k: int = 5, *, query_embedding: list[float] | None = None,
+) -> list[str]:
+    """Return top-K semantically relevant CBT chunks stored in the database."""
+    retriever = VectorRetriever()
+
+    if not query.strip():
+        return []
+
+    try:
+        if query_embedding is None:
+            query_embedding = await _embed_user_message(query)
+        if query_embedding is None:
+            return []
+        results = await retriever.search(
+            query_embedding,
+            top_k=top_k,
+            sources=("cbt_pdf",),
+        )
         return [item["content"] for item in results if item.get("content")]
     except Exception:
-        logger.exception("Semantic retrieval failed; falling back to naive top-k.")
-        key_name = "content" if "content" in retriever.store[0] else "chunk"
-        return [item[key_name] for item in retriever.store[:top_k] if item.get(key_name)]
+        logger.exception("Semantic CBT retrieval failed.")
+        return []
 
 
-async def retrieve_journal_context(user_message: str) -> list[dict]:
+async def retrieve_journal_context(
+    user_message: str, *, query_embedding: list[float] | None = None,
+) -> list[dict]:
     """Retrieve journal entries semantically relevant to the user's message."""
+    if not user_message.strip():
+        return []
+
     try:
-        embedder = Embedder()
+        if query_embedding is None:
+            query_embedding = await _embed_user_message(user_message)
+        if query_embedding is None:
+            return []
         retriever = VectorRetriever()
-        query_embedding = await embedder.embed(user_message)
-        return retriever.search(query_embedding)
-    except FileNotFoundError:
-        logger.debug("Vector store not found for journal context.")
+        return await retriever.search(
+            query_embedding,
+            top_k=5,
+            sources=("journal",),
+        )
+    except ValueError:
+        logger.warning("Journal retrieval received an invalid embedding query.")
         return []
     except Exception:
         logger.exception("Journal context retrieval failed.")
         return []
 
 
-def _build_historian_prompt(state: AgentState, query_chunks: list[str]) -> str:
+async def _load_calendar_context(
+    calendar_service: CalendarService, state: AgentState,
+) -> list[str]:
+    """Load upcoming calendar events for the user, if user context available."""
+    try:
+        user_id = state.get("user_id", "")
+        if not user_id:
+            return []
+        ctx = await calendar_service.get_context(user_id)
+        return [
+            f"{e.title} on {e.date} ({e.type})"
+            for e in ctx.upcoming_events
+        ]
+    except Exception:
+        logger.exception("Failed to load calendar context.")
+        return []
+
+
+def _build_historian_prompt(state: AgentState, query_chunks: list[str] | None = None) -> str:
     """Build the user-facing prompt for the Historian with available context."""
+    query_chunks = query_chunks or []
     parts: list[str] = []
 
     # Conversation history (last 10 turns)
@@ -133,21 +167,28 @@ def _extract_json_from_llm_response(content: str) -> dict:
 
 async def historian_node(state: AgentState) -> dict[str, Any]:
     """Run the Historian agent to gather contextual briefing."""
-    calendar_context = state.get("calendar_context", [])
-    journal_results = await retrieve_journal_context(state.get("user_message", ""))
+    user_message = state.get("user_message", "")
+
+    # Embed once, then run all retrievals in parallel.
+    query_embedding = await _embed_user_message(user_message)
+
+    calendar_service = CalendarService()
+
+    journal_results, query_chunks, calendar_ctx = await asyncio.gather(
+        retrieve_journal_context(user_message, query_embedding=query_embedding),
+        retrieve_relevant_chunks(user_message, top_k=5, query_embedding=query_embedding),
+        _load_calendar_context(calendar_service, state),
+    )
+
+    # Use DB-loaded calendar context, falling back to state
+    calendar_context = calendar_ctx if calendar_ctx else state.get("calendar_context", [])
+
     journal_context = [
         f"{item['content']} (score={round(item['score'], 3)})"
         for item in journal_results
     ]
 
-    # Retrieve relevant CBT chunks via semantic search.
-    query_chunks = await retrieve_relevant_chunks(state.get("user_message", ""), top_k=5)
-
-    llm = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash-lite",
-        google_api_key=settings.gemini_api_key,
-        temperature=0.3,
-    )
+    llm = get_historian_llm()
 
     prompt = _build_historian_prompt(state, query_chunks)
     messages = [SystemMessage(content=HISTORIAN_SYSTEM), HumanMessage(content=prompt)]
