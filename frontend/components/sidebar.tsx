@@ -14,6 +14,7 @@ import {
   Trash2,
   BookOpen,
   Calendar,
+  ClipboardList,
 } from "lucide-react";
 import type { ConversationOut } from "@/lib/api";
 
@@ -192,6 +193,18 @@ export function Sidebar({
           <Link href="/calendar">
             <Calendar className="size-4 shrink-0" />
             {open && <span className="truncate">Calendar</span>}
+          </Link>
+        </Button>
+
+        <Button
+          variant="ghost"
+          className={`w-full justify-start gap-3 ${open ? "px-3" : "px-0 justify-center"}`}
+          title="My Plan"
+          asChild
+        >
+          <Link href="/plan">
+            <ClipboardList className="size-4 shrink-0" />
+            {open && <span className="truncate">My Plan</span>}
           </Link>
         </Button>
       </nav>
