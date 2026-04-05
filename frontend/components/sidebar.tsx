@@ -9,14 +9,16 @@ import {
   MessageSquare,
   ChevronLeft,
   ChevronRight,
-  HelpCircle,
-  CreditCard,
   Trash2,
   BookOpen,
   Calendar,
   ClipboardList,
+  LayoutDashboard,
+  MessageCircle,
+  Settings,
+  LogOut,
 } from "lucide-react";
-import type { ConversationOut } from "@/lib/api";
+import { type ConversationOut, clear_auth } from "@/lib/api";
 
 interface SidebarProps {
   /** Whether the sidebar is expanded */
@@ -55,6 +57,11 @@ export function Sidebar({
   conversations = [],
   active_conversation_id,
 }: SidebarProps) {
+  function handle_sign_out() {
+    clear_auth();
+    window.location.href = "/auth/login";
+  }
+
   return (
     <aside
       className={`relative flex h-full flex-col border-r border-border bg-sidebar transition-all duration-300 ease-in-out ${
@@ -90,6 +97,32 @@ export function Sidebar({
 
       {/* Nav links */}
       <nav className="flex flex-1 flex-col gap-1 overflow-y-auto p-2">
+        {/* Dashboard */}
+        <Button
+          variant="ghost"
+          className={`w-full justify-start gap-3 ${open ? "px-3" : "px-0 justify-center"}`}
+          title="Dashboard"
+          asChild
+        >
+          <Link href="/dashboard">
+            <LayoutDashboard className="size-4 shrink-0" />
+            {open && <span className="truncate">Dashboard</span>}
+          </Link>
+        </Button>
+
+        {/* Chat */}
+        <Button
+          variant="ghost"
+          className={`w-full justify-start gap-3 ${open ? "px-3" : "px-0 justify-center"}`}
+          title="Chat"
+          asChild
+        >
+          <Link href="/chat">
+            <MessageCircle className="size-4 shrink-0" />
+            {open && <span className="truncate">Chat</span>}
+          </Link>
+        </Button>
+
         {/* New Chat */}
         <Button
           variant="ghost"
@@ -214,25 +247,23 @@ export function Sidebar({
         <Button
           variant="ghost"
           className={`w-full justify-start gap-3 ${open ? "px-3" : "px-0 justify-center"}`}
-          title="Help"
+          title="Settings"
           asChild
         >
-          <Link href="/help">
-            <HelpCircle className="size-4 shrink-0" />
-            {open && <span className="truncate">Help</span>}
+          <Link href="/settings">
+            <Settings className="size-4 shrink-0" />
+            {open && <span className="truncate">Settings</span>}
           </Link>
         </Button>
 
         <Button
           variant="ghost"
           className={`w-full justify-start gap-3 ${open ? "px-3" : "px-0 justify-center"}`}
-          title="Subscription"
-          asChild
+          title="Sign Out"
+          onClick={handle_sign_out}
         >
-          <Link href="/subscription">
-            <CreditCard className="size-4 shrink-0" />
-            {open && <span className="truncate">Subscription</span>}
-          </Link>
+          <LogOut className="size-4 shrink-0" />
+          {open && <span className="truncate">Sign Out</span>}
         </Button>
       </div>
     </aside>
