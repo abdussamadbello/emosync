@@ -11,11 +11,10 @@ import logging
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_google_genai import ChatGoogleGenerativeAI
 
+from app.agent.llm import get_specialist_llm
 from app.agent.prompts import SPECIALIST_SYSTEM
 from app.agent.state import AgentState
-from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +30,34 @@ def _build_specialist_prompt(state: AgentState) -> str:
     parts.append("## Contextual briefing from The Historian")
     parts.append(f"**Date insights:** {briefing.get('date_insights', 'None available.')}")
     parts.append(f"**Journal insights:** {briefing.get('journal_insights', 'None available.')}")
+
+    # Therapeutic context
+    profile = state.get("user_profile", {})
+    if profile:
+        parts.append("\n## User profile")
+        parts.append(f"Grief type: {profile.get('grief_type', 'unknown')}")
+        parts.append(f"Support system: {profile.get('support_system', 'unknown')}")
+        approaches = profile.get('preferred_approaches', [])
+        if approaches:
+            parts.append(f"Preferred approaches: {', '.join(approaches)}")
+
+    assessment = state.get("assessment_context", {})
+    if assessment:
+        parts.append("\n## Latest assessment")
+        parts.append(f"{assessment.get('instrument', 'PHQ-9').upper()}: {assessment.get('total_score', '?')}/27 ({assessment.get('severity', 'unknown')})")
+
+    plan = state.get("treatment_plan", {})
+    if plan:
+        parts.append(f"\n## Active treatment plan: {plan.get('title', 'Untitled')}")
+        for g in plan.get("goals", []):
+            parts.append(f"- [{g.get('status', '?')}] {g.get('description', '')}")
+
+    moods = state.get("recent_moods", [])
+    if moods:
+        scores = [m["score"] for m in moods if "score" in m]
+        if scores:
+            avg = sum(scores) / len(scores)
+            parts.append(f"\n## Recent mood trend: avg {avg:.1f}/10 over {len(scores)} entries")
 
     # Conversation history (last 10 turns)
     history = state.get("conversation_history", [])
@@ -53,11 +80,7 @@ def _build_specialist_prompt(state: AgentState) -> str:
 async def specialist_node(state: AgentState) -> dict[str, Any]:
     """Run the Specialist agent to generate a therapy-informed response."""
 
-    llm = ChatGoogleGenerativeAI(
-        model="gemini-1.5-pro",
-        google_api_key=settings.gemini_api_key,
-        temperature=0.7,
-    )
+    llm = get_specialist_llm()
 
     prompt = _build_specialist_prompt(state)
     messages = [SystemMessage(content=SPECIALIST_SYSTEM), HumanMessage(content=prompt)]
