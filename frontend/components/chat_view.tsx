@@ -15,6 +15,8 @@ import {
   User,
   BookOpen,
   Target,
+  SmilePlus,
+  ClipboardCheck,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { Sidebar } from "@/components/sidebar";
@@ -35,6 +37,10 @@ import {
   type ConversationOut,
 } from "@/lib/api";
 import { read_sse_stream } from "@/lib/sse";
+import { MoodModal } from "@/components/chat-actions/mood-modal";
+import { JournalModal } from "@/components/chat-actions/journal-modal";
+import { GoalModal } from "@/components/chat-actions/goal-modal";
+import { AssessmentModal } from "@/components/chat-actions/assessment-modal";
 
 // ── Suggest-tag helpers ───────────────────────────────────────────────────────
 
@@ -47,25 +53,21 @@ function parse_suggest_tag(text: string): { clean_text: string; suggest: string 
   };
 }
 
-function SuggestButton({ suggest }: { suggest: string }) {
-  const href = suggest === "journal" ? "/journal/new" : "/plan";
+function ChatActionButton({ suggest, onClick }: { suggest: string; onClick: () => void }) {
   const label =
-    suggest === "journal"
-      ? "Open Journal"
-      : suggest === "goal_update"
-      ? "Update Goal"
-      : suggest === "assessment"
-      ? "Take Assessment"
-      : "Check Mood";
-  const Icon = suggest === "journal" ? BookOpen : Target;
+    suggest === "journal" ? "Write in journal"
+    : suggest === "goal_update" ? "Update my goal"
+    : suggest === "assessment" ? "Take a check-in"
+    : "How am I feeling?";
+  const Icon = suggest === "journal" ? BookOpen : suggest === "goal_update" ? Target : suggest === "assessment" ? ClipboardCheck : SmilePlus;
   return (
-    <Link
-      href={href}
+    <button
+      onClick={onClick}
       className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-primary/30 bg-primary/5 px-3 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/10"
     >
       <Icon className="size-3.5" />
       {label}
-    </Link>
+    </button>
   );
 }
 
@@ -113,6 +115,12 @@ export function ChatView({ initial_conversation_id = null }: ChatViewProps) {
   // ── Text input ────────────────────────────────────────────────────────────
   const [input, setInput] = useState("");
   const is_sending_ref = useRef(false);
+
+  // ── Active action modal ───────────────────────────────────────────────────
+  const [active_action, setActiveAction] = useState<{
+    message_index: number;
+    type: string;
+  } | null>(null);
 
   // ── Sidebar ───────────────────────────────────────────────────────────────
   const [sidebar_open, setSidebarOpen] = useState(true);
@@ -633,12 +641,40 @@ export function ChatView({ initial_conversation_id = null }: ChatViewProps) {
                             <Mic className="ml-1.5 mb-0.5 inline-block size-3 opacity-50" />
                           )}
                         </div>
-                        {msg.role === "assistant" &&
-                          parse_suggest_tag(msg.content).suggest && (
-                            <SuggestButton
-                              suggest={parse_suggest_tag(msg.content).suggest!}
-                            />
-                          )}
+                        {msg.role === "assistant" && (() => {
+                          const { suggest } = parse_suggest_tag(msg.content);
+                          if (!suggest) return null;
+
+                          const is_open = active_action?.message_index === i && active_action.type === suggest;
+
+                          if (is_open) {
+                            const tok = get_token() ?? "";
+                            return (
+                              <>
+                                {suggest === "mood_check" && (
+                                  <MoodModal token={tok} onClose={() => setActiveAction(null)} onSaved={() => setActiveAction(null)} />
+                                )}
+                                {suggest === "journal" && (
+                                  <JournalModal
+                                    token={tok}
+                                    context={parse_suggest_tag(msg.content).clean_text.slice(0, 500)}
+                                    conversationId={conversation_id ?? null}
+                                    onClose={() => setActiveAction(null)}
+                                    onSaved={() => setActiveAction(null)}
+                                  />
+                                )}
+                                {suggest === "goal_update" && (
+                                  <GoalModal token={tok} onClose={() => setActiveAction(null)} onSaved={() => setActiveAction(null)} />
+                                )}
+                                {suggest === "assessment" && (
+                                  <AssessmentModal token={tok} onClose={() => setActiveAction(null)} onSaved={() => setActiveAction(null)} />
+                                )}
+                              </>
+                            );
+                          }
+
+                          return <ChatActionButton suggest={suggest} onClick={() => setActiveAction({ message_index: i, type: suggest })} />;
+                        })()}
                       </div>
                     </div>
                   ))}
