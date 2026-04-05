@@ -219,10 +219,22 @@ class GeminiLiveVoiceBridge:
 
         input_transcription = server_content.get("inputTranscription")
         if input_transcription and input_transcription.get("text") is not None:
-            text = input_transcription["text"].strip()
-            if text and text != self._input_transcript:
-                self._input_transcript = text
-                yield VoiceServerEvent(type="user.transcript", data={"text": text})
+            fragment = input_transcription["text"].strip()
+            if fragment:
+                # Accumulate fragments into full transcript (Gemini may send
+                # incremental pieces rather than the full text each time)
+                if fragment.startswith(self._input_transcript):
+                    # Gemini sent cumulative text — use as-is
+                    self._input_transcript = fragment
+                else:
+                    # Gemini sent a new fragment — append to what we have
+                    self._input_transcript = (
+                        (self._input_transcript + " " + fragment).strip()
+                    )
+                yield VoiceServerEvent(
+                    type="user.transcript",
+                    data={"text": self._input_transcript},
+                )
 
         output_transcription = server_content.get("outputTranscription")
         if output_transcription and output_transcription.get("text") is not None:
