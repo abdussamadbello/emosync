@@ -24,6 +24,7 @@ async def run_turn(
     conversation_id: str,
     user_message_id: str,
     conversation_history: list[dict[str, str]] | None = None,
+    user_id: str | None = None,
 ) -> AsyncIterator[str]:
     """Yield text fragments for the assistant reply.
 
@@ -35,13 +36,13 @@ async def run_turn(
         conversation_id=conversation_id,
         user_message_id=user_message_id,
         conversation_history=conversation_history,
+        user_id=user_id,
     )
 
     words = text.split()
     for i, word in enumerate(words):
         token = word + (" " if i < len(words) - 1 else "")
         yield token
-        await asyncio.sleep(0.01)
 
 
 async def run_turn_full(
@@ -50,6 +51,7 @@ async def run_turn_full(
     conversation_id: str,
     user_message_id: str,
     conversation_history: list[dict[str, str]] | None = None,
+    user_id: str | None = None,
 ) -> tuple[str, str | None]:
     """Return assistant text and optional prosody hint.
 
@@ -69,6 +71,7 @@ async def run_turn_full(
         conversation_id=conversation_id,
         user_message_id=user_message_id,
         conversation_history=conversation_history or [],
+        user_id=user_id,
     )
     cleaned, prosody = _strip_trailing_prosody_hint(final_text)
     return cleaned, prosody
@@ -140,6 +143,7 @@ async def _agent_response_text(
     conversation_id: str,
     user_message_id: str,
     conversation_history: list[dict[str, str]],
+    user_id: str | None = None,
 ) -> str:
     """Run the full Historian → Specialist → Anchor pipeline and return full text."""
     from app.agent.graph import grief_coach_graph
@@ -151,6 +155,7 @@ async def _agent_response_text(
         "conversation_history": conversation_history,
         "calendar_context": [],
         "journal_context": [],
+        "user_id": str(user_id) if user_id else "",
     }
 
     try:

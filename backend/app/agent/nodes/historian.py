@@ -16,6 +16,7 @@ from app.core.config import settings
 from app.mcp.calendar.service import CalendarService
 from app.mcp.journal.embedding import Embedder
 from app.ingestion.vector_retriever import VectorRetriever
+from app.services import therapeutic_context
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +104,14 @@ async def _load_calendar_context(
         return []
 
 
+async def _noop_none():
+    return None
+
+
+async def _noop_list():
+    return []
+
+
 def _build_historian_prompt(state: AgentState, query_chunks: list[str] | None = None) -> str:
     """Build the user-facing prompt for the Historian with available context."""
     query_chunks = query_chunks or []
@@ -174,10 +183,16 @@ async def historian_node(state: AgentState) -> dict[str, Any]:
 
     calendar_service = CalendarService()
 
-    journal_results, query_chunks, calendar_ctx = await asyncio.gather(
+    user_id = state.get("user_id", "")
+
+    journal_results, query_chunks, calendar_ctx, profile, phq9, plan, moods = await asyncio.gather(
         retrieve_journal_context(user_message, query_embedding=query_embedding),
         retrieve_relevant_chunks(user_message, top_k=5, query_embedding=query_embedding),
         _load_calendar_context(calendar_service, state),
+        therapeutic_context.get_profile(user_id) if user_id else _noop_none(),
+        therapeutic_context.get_latest_assessment(user_id, "phq9") if user_id else _noop_none(),
+        therapeutic_context.get_active_plan(user_id) if user_id else _noop_none(),
+        therapeutic_context.get_recent_moods(user_id) if user_id else _noop_list(),
     )
 
     # Use DB-loaded calendar context, falling back to state
@@ -232,4 +247,8 @@ async def historian_node(state: AgentState) -> dict[str, Any]:
         "journal_context": journal_context,
         "cbt_chunks": query_chunks,
         "historian_briefing": briefing,
+        "user_profile": profile or {},
+        "assessment_context": phq9 or {},
+        "treatment_plan": plan or {},
+        "recent_moods": moods or [],
     }

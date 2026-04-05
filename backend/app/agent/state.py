@@ -25,6 +25,13 @@ class AgentState(TypedDict, total=False):
     # Structured briefing: {"date_insights": str, "journal_insights": str}
     historian_briefing: dict[str, str]
 
+    # --- Therapeutic context (loaded by Historian) ---
+    user_id: str
+    user_profile: dict
+    assessment_context: dict
+    treatment_plan: dict
+    recent_moods: list[dict]
+
     # --- Specialist output ---
     specialist_response: str
 
