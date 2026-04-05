@@ -88,7 +88,7 @@ export function Sidebar({
             className="shrink-0 rounded-sm"
           />
           {open && (
-            <span className="truncate text-base font-semibold tracking-tight">
+            <span className="truncate text-lg font-semibold tracking-tight">
               EmoSync
             </span>
           )}
@@ -107,6 +107,45 @@ export function Sidebar({
           <Link href="/dashboard">
             <LayoutDashboard className="size-4 shrink-0" />
             {open && <span className="truncate">Dashboard</span>}
+          </Link>
+        </Button>
+
+        {/* Journal */}
+        <Button
+          variant="ghost"
+          className={`w-full justify-start gap-3 ${open ? "px-3" : "px-0 justify-center"}`}
+          title="Journal"
+          asChild
+        >
+          <Link href="/journal">
+            <BookOpen className="size-4 shrink-0" />
+            {open && <span className="truncate">Journal</span>}
+          </Link>
+        </Button>
+
+        {/* Calendar */}
+        <Button
+          variant="ghost"
+          className={`w-full justify-start gap-3 ${open ? "px-3" : "px-0 justify-center"}`}
+          title="Calendar"
+          asChild
+        >
+          <Link href="/calendar">
+            <Calendar className="size-4 shrink-0" />
+            {open && <span className="truncate">Calendar</span>}
+          </Link>
+        </Button>
+
+        {/* My Plan */}
+        <Button
+          variant="ghost"
+          className={`w-full justify-start gap-3 ${open ? "px-3" : "px-0 justify-center"}`}
+          title="My Plan"
+          asChild
+        >
+          <Link href="/plan">
+            <ClipboardList className="size-4 shrink-0" />
+            {open && <span className="truncate">My Plan</span>}
           </Link>
         </Button>
 
@@ -148,7 +187,7 @@ export function Sidebar({
         {/* Past chats — expanded, logged in */}
         {is_logged_in && open && (
           <div className="mt-4">
-            <p className="mb-1 px-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+            <p className="mb-1.5 px-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               Your Chats
             </p>
             <div className="flex flex-col gap-0.5">
@@ -164,7 +203,7 @@ export function Sidebar({
                     >
                       <Button
                         variant={is_active ? "secondary" : "ghost"}
-                        className="w-full justify-start gap-3 px-3 pr-8 text-sm"
+                        className="w-full justify-start gap-3 px-3 pr-8 text-[0.9375rem]"
                         asChild
                       >
                         <Link href={`/c/${conv.id}`}>
@@ -203,43 +242,6 @@ export function Sidebar({
             <MessageSquare className="size-4 shrink-0" />
           </Button>
         )}
-
-        {/* Journal & Calendar links */}
-        <Button
-          variant="ghost"
-          className={`w-full justify-start gap-3 ${open ? "px-3" : "px-0 justify-center"}`}
-          title="Journal"
-          asChild
-        >
-          <Link href="/journal">
-            <BookOpen className="size-4 shrink-0" />
-            {open && <span className="truncate">Journal</span>}
-          </Link>
-        </Button>
-
-        <Button
-          variant="ghost"
-          className={`w-full justify-start gap-3 ${open ? "px-3" : "px-0 justify-center"}`}
-          title="Calendar"
-          asChild
-        >
-          <Link href="/calendar">
-            <Calendar className="size-4 shrink-0" />
-            {open && <span className="truncate">Calendar</span>}
-          </Link>
-        </Button>
-
-        <Button
-          variant="ghost"
-          className={`w-full justify-start gap-3 ${open ? "px-3" : "px-0 justify-center"}`}
-          title="My Plan"
-          asChild
-        >
-          <Link href="/plan">
-            <ClipboardList className="size-4 shrink-0" />
-            {open && <span className="truncate">My Plan</span>}
-          </Link>
-        </Button>
       </nav>
 
       {/* Bottom links */}

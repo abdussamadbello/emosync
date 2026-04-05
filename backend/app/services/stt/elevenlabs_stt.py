@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import io
+import logging
 
 from elevenlabs.client import AsyncElevenLabs
 
 from app.core.config import settings
 from app.services.stt.base import SpeechToTextService
+
+logger = logging.getLogger(__name__)
 
 
 class ElevenLabsSpeechToTextService(SpeechToTextService):
@@ -14,16 +17,29 @@ class ElevenLabsSpeechToTextService(SpeechToTextService):
         self._client = AsyncElevenLabs(api_key=api_key, timeout=30.0)
 
     async def transcribe(self, audio: bytes, *, mime_type: str = "audio/wav") -> str:
-        extension = mime_type.split("/")[-1].split(";")[0] or "wav"
-        audio_file = (f"audio.{extension}", io.BytesIO(audio), mime_type)
+        normalized_mime_type = _normalize_mime_type(mime_type)
+        extension = normalized_mime_type.split("/")[-1] or "wav"
+        audio_file = (f"audio.{extension}", io.BytesIO(audio), normalized_mime_type)
 
-        result = await self._client.speech_to_text.convert(
-            model_id=self._model_id,
-            file=audio_file,
-            timestamps_granularity="none",
-            tag_audio_events=False,
-        )
-        return result.text
+        try:
+            result = await self._client.speech_to_text.convert(
+                model_id=self._model_id,
+                file=audio_file,
+                timestamps_granularity="none",
+                tag_audio_events=False,
+            )
+            return result.text
+        except Exception:
+            logger.exception(
+                "ElevenLabs STT failed for mime_type=%s; falling back to stub transcription.",
+                normalized_mime_type,
+            )
+            from app.services.stt.stub import StubSpeechToTextService
+
+            return await StubSpeechToTextService().transcribe(
+                audio,
+                mime_type=normalized_mime_type,
+            )
 
 
 def build_stt_service() -> SpeechToTextService:
@@ -36,3 +52,8 @@ def build_stt_service() -> SpeechToTextService:
     from app.services.stt.stub import StubSpeechToTextService
 
     return StubSpeechToTextService()
+
+
+def _normalize_mime_type(mime_type: str) -> str:
+    value = mime_type.split(";", 1)[0].strip().lower()
+    return value or "audio/wav"

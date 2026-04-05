@@ -7,7 +7,7 @@ import uuid
 from collections.abc import AsyncIterator
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import func, select, update
+from sqlalchemy import delete as sa_delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
@@ -26,6 +26,17 @@ from app.services.chat_turn import run_turn
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["chat"])
+
+# Maximum title length for sidebar display
+_MAX_TITLE_LEN = 60
+
+
+def _title_from_content(content: str) -> str:
+    """Derive a short title from the first user message."""
+    title = content.strip().replace("\n", " ")
+    if len(title) > _MAX_TITLE_LEN:
+        title = title[:_MAX_TITLE_LEN].rsplit(" ", 1)[0] + "…"
+    return title
 
 
 def _sse(event: str, payload: dict) -> str:
@@ -84,6 +95,27 @@ async def list_messages(
     return list(result.scalars().all())
 
 
+@router.delete(
+    "/conversations/{conversation_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_conversation(
+    conversation_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    conv = await db.get(Conversation, conversation_id)
+    if conv is None or conv.user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found"
+        )
+    await db.execute(
+        sa_delete(Message).where(Message.conversation_id == conversation_id)
+    )
+    await db.delete(conv)
+    await db.commit()
+
+
 @router.post("/conversations/{conversation_id}/messages/stream")
 async def stream_message_turn(
     conversation_id: uuid.UUID,
@@ -103,6 +135,12 @@ async def stream_message_turn(
     db.add(user_msg)
     await db.flush()
     user_message_id = str(user_msg.id)
+
+    # Auto-set title from first user message if not already set
+    if not conv.title:
+        conv.title = _title_from_content(body.content)
+        db.add(conv)
+
     await db.commit()
 
     cid_str = str(conversation_id)

@@ -2,11 +2,18 @@ from __future__ import annotations
 
 import os
 from logging.config import fileConfig
+from pathlib import Path
 
 from alembic import context
+from dotenv import load_dotenv
 from sqlalchemy import engine_from_config, pool
 
 from app.models import Base
+
+# Load .env from repo root (one level above backend/)
+_env_file = Path(__file__).resolve().parents[2] / ".env"
+if _env_file.exists():
+    load_dotenv(_env_file)
 
 config = context.config
 

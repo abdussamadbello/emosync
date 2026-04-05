@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+import logging
 
 from elevenlabs.client import AsyncElevenLabs
 from elevenlabs.types import VoiceSettings
 
 from app.core.config import settings
 from app.services.tts.base import TextToSpeechService
+
+logger = logging.getLogger(__name__)
 
 
 class ElevenLabsTextToSpeechService(TextToSpeechService):
@@ -21,16 +24,26 @@ class ElevenLabsTextToSpeechService(TextToSpeechService):
         *,
         prosody_hint: str | None = None,
     ) -> AsyncIterator[bytes]:
-        stream = self._client.text_to_speech.convert_as_stream(
-            self._voice_id,
-            text=text,
-            model_id=self._model_id,
-            output_format=settings.voice_output_format,
-            voice_settings=_prosody_to_voice_settings(prosody_hint),
-        )
+        try:
+            stream = self._client.text_to_speech.convert_as_stream(
+                self._voice_id,
+                text=text,
+                model_id=self._model_id,
+                output_format=settings.voice_output_format,
+                voice_settings=_prosody_to_voice_settings(prosody_hint),
+            )
 
-        async for chunk in stream:
-            if chunk:
+            async for chunk in stream:
+                if chunk:
+                    yield chunk
+        except Exception:
+            logger.exception("ElevenLabs TTS failed; falling back to stub audio.")
+            from app.services.tts.stub import StubTextToSpeechService
+
+            async for chunk in StubTextToSpeechService().synthesize_stream(
+                text,
+                prosody_hint=prosody_hint,
+            ):
                 yield chunk
 
 

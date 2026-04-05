@@ -10,6 +10,7 @@ ClientEventType = Literal[
     "input_text.final",
     "input_audio.append",
     "input_audio.commit",
+    "input_audio.clear",
     "turn.cancel",
     "ping",
 ]
@@ -21,6 +22,7 @@ ServerEventType = Literal[
     "assistant.text.done",
     "output_audio.chunk",
     "output_audio.done",
+    "turn.interrupted",
     "turn.done",
     "error",
     "pong",

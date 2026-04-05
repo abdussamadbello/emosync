@@ -1,0 +1,16 @@
+--- a/backend/tests/test_voice_edges.py
++++ b/backend/tests/test_voice_edges.py
+@@ -21,10 +21,11 @@
+         import uuid
+ 
+         fake_id = str(uuid.uuid4())
+-        with pytest.raises(Exception):
+-            # Starlette test client raises on policy close
+-            with tc.websocket_connect(f"/api/v1/voice/ws/{fake_id}"):
+-                pass
++        # Starlette test client raises on policy close
++        from starlette.websockets import WebSocketDisconnect
++        with pytest.raises(WebSocketDisconnect) as exc:
++            with tc.websocket_connect(f"/api/v1/voice/ws/{fake_id}") as ws:
++                ws.receive_json()
++        assert exc.value.code == 1008

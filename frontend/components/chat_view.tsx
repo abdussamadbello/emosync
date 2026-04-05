@@ -594,10 +594,10 @@ export function ChatView({ initial_conversation_id = null }: ChatViewProps) {
                     </div>
                   </div>
                   <div className="text-center">
-                    <h2 className="text-xl font-semibold tracking-tight">
+                    <h2 className="text-2xl font-semibold tracking-tight text-foreground">
                       Welcome to EmoSync
                     </h2>
-                    <p className="mt-1.5 text-sm text-muted-foreground">
+                    <p className="mt-2 text-base text-muted-foreground">
                       Your safe space for emotional wellness
                     </p>
                   </div>
@@ -615,9 +615,9 @@ export function ChatView({ initial_conversation_id = null }: ChatViewProps) {
                     >
                       <div className="flex flex-col items-start">
                         <div
-                          className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
+                          className={`max-w-[85%] rounded-2xl px-5 py-3 text-[0.9375rem] leading-[1.7] shadow-sm ${
                             msg.role === "user"
-                              ? "rounded-br-md bg-primary text-primary-foreground"
+                              ? "rounded-br-md bg-primary text-primary-foreground shadow-primary/5"
                               : "rounded-bl-md bg-muted text-foreground"
                           }`}
                         >
@@ -681,7 +681,7 @@ export function ChatView({ initial_conversation_id = null }: ChatViewProps) {
                     onKeyDown={handle_key_down}
                     placeholder="How are you feeling today?"
                     disabled={is_typing}
-                    className="flex-1 bg-transparent py-1.5 text-sm outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                    className="flex-1 bg-transparent py-2 text-[0.9375rem] outline-none placeholder:text-muted-foreground/60 disabled:cursor-not-allowed disabled:opacity-50"
                   />
                   <Button
                     size="icon"
@@ -710,7 +710,7 @@ export function ChatView({ initial_conversation_id = null }: ChatViewProps) {
                 </div>
               )}
 
-              <p className="mt-2 text-center text-[11px] text-muted-foreground/70">
+                <p className="mt-2.5 text-center text-xs text-muted-foreground/60">
                 EmoSync can make mistakes. Always seek professional help for
                 serious mental health concerns.
               </p>

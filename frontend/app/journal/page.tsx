@@ -54,7 +54,6 @@ export default function JournalPage() {
     setError("");
     try {
       const data = await list_journal_entries(t, tag ? { tag } : undefined);
-      // Sort most recent first
       data.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
       setEntries(data);
     } catch (e: unknown) {
@@ -88,7 +87,7 @@ export default function JournalPage() {
         <div className="mb-6 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
             <BookOpen className="size-5 text-primary" />
-            <h1 className="text-xl font-semibold tracking-tight">Journal</h1>
+            <h1 className="text-2xl font-semibold tracking-tight">Journal</h1>
           </div>
           <Button asChild size="sm">
             <Link href="/journal/new">
@@ -135,10 +134,10 @@ export default function JournalPage() {
 
         {/* Entry list */}
         {entries.length === 0 && !is_loading ? (
-          <div className="rounded-xl border border-border bg-card p-10 text-center">
+          <div className="rounded-2xl border border-border bg-card p-10 text-center">
             <BookOpen className="mx-auto mb-3 size-8 text-muted-foreground/40" />
-            <p className="text-sm font-medium text-muted-foreground">No journal entries yet</p>
-            <p className="mt-1 text-xs text-muted-foreground">
+            <p className="text-[0.9375rem] font-medium text-muted-foreground">No journal entries yet</p>
+            <p className="mt-1.5 text-sm text-muted-foreground">
               Writing about your feelings can help process grief.
             </p>
             <Button asChild className="mt-4" size="sm">
@@ -146,13 +145,13 @@ export default function JournalPage() {
             </Button>
           </div>
         ) : (
-          <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-4">
             {entries.map((entry) => (
               <Link key={entry.id} href={`/journal/${entry.id}`}>
-                <div className="rounded-xl border border-border bg-card p-4 shadow-sm transition-colors hover:border-primary/40 hover:bg-card/80">
-                  <div className="mb-2 flex items-start justify-between gap-3">
+                <div className="rounded-2xl border border-border bg-card p-5 shadow-sm transition-colors hover:border-primary/40 hover:bg-card/80">
+                  <div className="mb-2.5 flex items-start justify-between gap-3">
                     <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium text-foreground">
+                      <p className="truncate text-[0.9375rem] font-medium text-foreground">
                         {entry.title ?? "Untitled entry"}
                       </p>
                       <p className="text-xs text-muted-foreground">{format_date(entry.created_at)}</p>
@@ -165,12 +164,12 @@ export default function JournalPage() {
                       </span>
                     )}
                   </div>
-                  <p className="line-clamp-3 text-xs text-muted-foreground">
+                  <p className="line-clamp-3 text-sm text-muted-foreground leading-relaxed">
                     {entry.content.slice(0, 150)}
                     {entry.content.length > 150 ? "…" : ""}
                   </p>
                   {entry.tags && entry.tags.length > 0 && (
-                    <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                    <div className="mt-3 flex flex-wrap items-center gap-1.5">
                       <Tag className="size-3 text-muted-foreground/60" />
                       {entry.tags.map((tag) => (
                         <span

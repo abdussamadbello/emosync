@@ -11,7 +11,7 @@ class MockJournalRetriever:
             {"content": "I need to work on my focus.", "score": 0.85, "tags": ["productivity"], "created_at": datetime.utcnow()},
         ]
 
-async def test_mcp():
+async def run_mcp_demo():
     print("=== Testing Calendar MCP ===")
     calendar_service = CalendarService()
     calendar_context = await calendar_service.get_context(user_id="test_user")
@@ -32,4 +32,4 @@ async def test_mcp():
         print(f"Embedding {i+1} length:", len(emb))
 
 if __name__ == "__main__":
-    asyncio.run(test_mcp())
+    asyncio.run(run_mcp_demo())

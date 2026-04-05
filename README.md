@@ -93,18 +93,16 @@ With Postgres running via Compose (`docker compose up db`):
 
 ```bash
 cd backend
-uv venv
-source .venv/bin/activate
-uv pip install -r requirements.txt
+uv sync
 export DATABASE_URL=postgresql+asyncpg://emosync:emosync@localhost:5432/emosync
 export DATABASE_URL_SYNC=postgresql://emosync:emosync@localhost:5432/emosync
-python -m alembic upgrade head
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+uv run python -m alembic upgrade head
+uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-`backend/.python-version` pins **3.11** so `uv venv` picks the right interpreter (uv can download it if missing). Always invoke tools as `python -m alembic` / `python -m pytest` so you use the venv’s Python.
+`backend/.python-version` pins **3.11** so `uv sync` picks the right interpreter (uv can download it if missing). `backend/pyproject.toml` is now the source of truth for backend dependencies, and `uv.lock` pins the resolved versions. Prefer `uv run ...` for commands so the project environment stays in sync automatically.
 
-If you prefer plain `venv` instead of uv: `python3.11 -m venv .venv` (after installing 3.11), then `pip install -r requirements.txt` as before.
+If you prefer plain `venv` instead of uv: `python3.11 -m venv .venv` (after installing 3.11), then `pip install -r requirements.txt`. `requirements.txt` is kept only as a compatibility path; the backend project definition now lives in `pyproject.toml`.
 
 ## Repository
 

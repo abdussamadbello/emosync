@@ -2,7 +2,7 @@
 
 ## Overview
 
-EmoSync uses a LangGraph-based agentic pipeline to generate therapy-informed responses for grief and heartbreak support. The pipeline runs three sequential nodes, each backed by Gemini 1.5 Pro.
+EmoSync uses a LangGraph-based agentic pipeline to generate therapy-informed responses for grief and heartbreak support. The pipeline runs three sequential nodes, each backed by Gemini 1.5 Pro. The same pipeline serves both the SSE text-chat path and the WebSocket real-time voice path.
 
 ## Pipeline: Historian → Specialist → Anchor
 
@@ -12,7 +12,7 @@ User message + conversation history
         ▼
 ┌──────────────┐
 │  Historian    │  Gather context from MCP servers (calendar dates,
-│  (temp=0.3)   │  journal entries). Currently stubbed — M5 pending.
+│  (temp=0.3)   │  journal entries). Mock data wired; real MCP M5.
 └──────┬───────┘
        ▼
 ┌──────────────┐
@@ -25,7 +25,9 @@ User message + conversation history
 │  (temp=0.3)   │  Ensures responses are emotionally safe.
 └──────┬───────┘
        ▼
-  Final response (streamed word-by-word via SSE)
+  Final response
+  ├── SSE text stream (chat turns)
+  └── TTS audio stream (voice WebSocket)
 ```
 
 ## Agent State
@@ -49,7 +51,7 @@ Defined in `backend/app/agent/state.py` as a `TypedDict`:
 
 - **Purpose:** Pull context from MCP servers — calendar dates, journal entries, past reflections.
 - **LLM:** Gemini 1.5 Pro, temperature 0.3
-- **MCP status:** Stub calls (passes empty lists). Wire real Calendar + Journal servers for M5.
+- **MCP status:** Mock data wired (`mcp/calendar/`, `mcp/journal/`). Replace stub calls with real MCP tool invocations for M5.
 - **Output:** JSON with `date_insights` and `journal_insights` fields.
 - **Fallback:** Returns safe default context if LLM fails.
 
@@ -87,6 +89,80 @@ The HTTP layer calls **only** `run_turn()` in `backend/app/services/chat_turn.py
 4. Strips prosody hints from the final response
 5. Streams word-by-word as an `AsyncIterator[str]`
 6. Falls back to a safe empathetic message if the pipeline raises
+
+## Voice pipeline
+
+The WebSocket handler at `/api/v1/voice/ws/{conversation_id}` now prefers a backend Gemini Live bridge for real-time audio I/O:
+
+```
+Browser mic PCM (base64 over WebSocket)
+        │
+        ▼
+┌──────────────────────────┐
+│  FastAPI voice route      │  Auth, conversation ownership, persistence
+│  (/api/v1/voice/ws/...)   │  and provider selection
+└───────────┬──────────────┘
+            ▼
+┌──────────────────────────┐
+│  GeminiLiveVoiceBridge    │  Streams audio to Gemini Live, relays
+│  (services/realtime/)     │  input transcripts + output audio/text
+└───────────┬──────────────┘
+            ▼
+      Frontend playback
+```
+
+If Gemini Live is unavailable, the route can still fall back to the older turn-based path (`STT -> run_turn() -> TTS`) and advertises `provider: "legacy"` in `session.ready`.
+
+### WebSocket event protocol
+
+| Direction | Event type | Payload |
+|---|---|---|
+| Client → Server | `input_audio.append` | `{ audio: "<base64 PCM>", mime_type: "audio/pcm;rate=16000" }` |
+| Client → Server | `input_audio.commit` | `{ mime_type: "audio/pcm;rate=16000" }` — flush current utterance |
+| Client → Server | `input_text.final` | `{ text: "..." }` — optional text fallback |
+| Client → Server | `turn.cancel` | `{}` |
+| Server → Client | `session.ready` | session metadata |
+| Server → Client | `user.transcript` | `{ text: "..." }` |
+| Server → Client | `assistant.text.delta` | `{ text: "..." }` |
+| Server → Client | `output_audio.chunk` | `{ audio_b64: "<base64 audio>", mime_type: "audio/pcm;rate=24000" }` |
+| Server → Client | `turn.interrupted` | `{}` |
+| Server → Client | `turn.done` | `{}` |
+| Server → Client | `error` | `{ message: "..." }` |
+
+## MCP servers
+
+Implemented under `backend/app/mcp/`:
+
+### Calendar (`mcp/calendar/`)
+- `schema.py` — `CalendarEvent` Pydantic model
+- `repository.py` — Persist and query calendar events
+- `service.py` — Service methods for Historian to call
+- `mock_data.py` — Seed data (anniversary dates, significant milestones)
+
+### Journal (`mcp/journal/`)
+- `schema.py` — `JournalEntry` Pydantic model
+- `repository.py` — Persist and query journal entries
+- `retriever.py` — Semantic search via vector similarity
+- `embedding.py` — Embed journal entries using Gemini
+- `service.py` — Service methods for Historian to call
+- `mock_data.py` — Seed journal entries for development
+
+## Ingestion pipeline
+
+`backend/app/ingestion/` provides a document ingestion CLI:
+
+```
+PDF file
+  └─ pdf_loader.py      → raw text
+      └─ chunker.py     → text chunks (+ optional semantic split)
+          └─ embedder.py → Gemini embeddings
+              └─ tagger.py → auto-tagged metadata
+                  └─ writer.py → LocalVectorStore or pgvector
+```
+
+Run: `cd backend && python -m app.ingestion.main_ingest --file path/to/doc.pdf`
+
+Query via `vector_retriever.py` (used by future RAG enhancements).
 
 ## Graph definition
 

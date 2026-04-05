@@ -23,6 +23,15 @@ class Settings(BaseSettings):
     # When unset, chat falls back to a deterministic stub (safe for CI / local dev).
     gemini_api_key: str | None = None
 
+    # Voice provider selection.
+    voice_provider: str = "gemini_live"
+    gemini_live_model: str = "gemini-2.5-flash-native-audio-preview-12-2025"
+    gemini_live_input_sample_rate_hz: int = 16_000
+    gemini_live_output_sample_rate_hz: int = 24_000
+    gemini_live_temperature: float = 0.7
+    gemini_live_silence_duration_ms: int = 900
+    gemini_live_prefix_padding_ms: int = 120
+
     # ElevenLabs STT model (Scribe).
     elevenlabs_stt_model_id: str = "scribe_v2"
 

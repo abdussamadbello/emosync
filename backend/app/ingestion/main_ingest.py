@@ -1,5 +1,4 @@
 
-
 import asyncio
 
 from app.ingestion.pdf_loader import PDFLoader
@@ -28,14 +27,13 @@ async def main():
             tagger=tagger   
         )
 
-        #  Use correct path (match your project structure)
         pdf_path = "backend/data/cbt.pdf"
 
         await pipeline.ingest_pdf(pdf_path)
 
-        await db.commit()  # ✅ ensure persistence
+        await db.commit()
 
-        print(f"✅ Successfully ingested: {pdf_path}")
+        print(f"✅ Successfully ingested into embedding_chunks: {pdf_path}")
 
 
 if __name__ == "__main__":

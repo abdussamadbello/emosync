@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from unittest.mock import AsyncMock
 
 from app.agent.nodes.historian import _extract_json_from_llm_response, retrieve_relevant_chunks
 
@@ -53,18 +54,38 @@ class TestExtractJsonFromLlmResponse:
 
 
 class TestRetrieveRelevantChunks:
-    """Tests for retrieve_relevant_chunks with missing/empty vector store."""
+    """Tests for retrieve_relevant_chunks with empty/failing DB retrieval."""
 
     @pytest.mark.asyncio
-    async def test_missing_vector_store_returns_empty(self, tmp_path):
-        """When vector store file doesn't exist, return empty list without crashing."""
+    async def test_empty_db_returns_empty(self, monkeypatch):
+        """When retrieval returns no rows, return an empty list without crashing."""
         import app.agent.nodes.historian as historian_mod
 
-        original = historian_mod.VECTOR_STORE_PATH
-        historian_mod.VECTOR_STORE_PATH = str(tmp_path / "nonexistent.json")
-        historian_mod._vector_store_warned = False
-        try:
-            result = await retrieve_relevant_chunks("test query")
-            assert result == []
-        finally:
-            historian_mod.VECTOR_STORE_PATH = original
+        monkeypatch.setattr(historian_mod.Embedder, "embed", AsyncMock(return_value=[0.1, 0.2]))
+        monkeypatch.setattr(
+            historian_mod.VectorRetriever,
+            "search",
+            AsyncMock(return_value=[]),
+        )
+
+        result = await retrieve_relevant_chunks("test query")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_returns_chunk_contents(self, monkeypatch):
+        import app.agent.nodes.historian as historian_mod
+
+        monkeypatch.setattr(historian_mod.Embedder, "embed", AsyncMock(return_value=[0.1, 0.2]))
+        monkeypatch.setattr(
+            historian_mod.VectorRetriever,
+            "search",
+            AsyncMock(
+                return_value=[
+                    {"content": "first chunk", "score": 0.9},
+                    {"content": "second chunk", "score": 0.8},
+                ]
+            ),
+        )
+
+        result = await retrieve_relevant_chunks("test query")
+        assert result == ["first chunk", "second chunk"]
