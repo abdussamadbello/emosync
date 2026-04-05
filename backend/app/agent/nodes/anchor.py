@@ -11,11 +11,10 @@ import logging
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_google_genai import ChatGoogleGenerativeAI
 
+from app.agent.llm import get_anchor_llm
 from app.agent.prompts import ANCHOR_SYSTEM
 from app.agent.state import AgentState
-from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +37,19 @@ def _build_anchor_prompt(state: AgentState) -> str:
     # Specialist draft
     parts.append(f"\n## Specialist's draft response\n{state.get('specialist_response', '')}")
 
+    # Assessment context for escalation
+    assessment = state.get("assessment_context", {})
+    if assessment:
+        parts.append(f"\n## Assessment context")
+        parts.append(f"{assessment.get('instrument', 'PHQ-9').upper()}: score {assessment.get('total_score', '?')}, severity: {assessment.get('severity', 'unknown')}")
+
+    # Calendar triggers
+    calendar = state.get("calendar_context", [])
+    if calendar:
+        parts.append(f"\n## Upcoming events")
+        for event in calendar:
+            parts.append(f"- {event}")
+
     parts.append(
         "\nReview the draft against all safety criteria. Output the final "
         "polished response for the user (with prosody hint at the end in brackets)."
@@ -49,11 +61,7 @@ def _build_anchor_prompt(state: AgentState) -> str:
 async def anchor_node(state: AgentState) -> dict[str, Any]:
     """Run the Anchor agent to validate and finalize the response."""
 
-    llm = ChatGoogleGenerativeAI(
-        model="gemini-1.5-pro",
-        google_api_key=settings.gemini_api_key,
-        temperature=0.3,
-    )
+    llm = get_anchor_llm()
 
     prompt = _build_anchor_prompt(state)
     messages = [SystemMessage(content=ANCHOR_SYSTEM), HumanMessage(content=prompt)]

@@ -101,6 +101,11 @@ these criteria before it reaches the user:
 6. **Prosody guidance** — Append a brief prosody hint at the very end in \
    square brackets for the TTS system, e.g. [speak slowly, warm tone] or \
    [gentle, measured pace]. This is stripped before display in text mode.
+7. **Score-aware escalation** — If the assessment context shows PHQ-9 >= 20 \
+   or GAD-7 >= 15 (severe), ALWAYS include crisis resources regardless of \
+   message content.
+8. **Calendar sensitivity** — If an anniversary or trigger event is within 3 \
+   days, use extra-gentle tone and validate the difficulty of that time.
 
 Output the final, polished response ready for the user. Do NOT add meta \
 commentary like "Here is the revised response" — just output the response \
