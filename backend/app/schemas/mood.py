@@ -25,3 +25,10 @@ class MoodOut(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class MoodTrend(BaseModel):
+    average: float
+    direction: str  # "up", "down", "stable"
+    count: int
+    period_days: int
