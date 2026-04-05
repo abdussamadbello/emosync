@@ -12,7 +12,6 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from app.agent.llm import get_historian_llm
 from app.agent.prompts import HISTORIAN_SYSTEM
 from app.agent.state import AgentState
-from app.core.config import settings
 from app.mcp.calendar.service import CalendarService
 from app.mcp.journal.embedding import Embedder
 from app.ingestion.vector_retriever import VectorRetriever

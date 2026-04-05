@@ -40,13 +40,13 @@ def _build_anchor_prompt(state: AgentState) -> str:
     # Assessment context for escalation
     assessment = state.get("assessment_context", {})
     if assessment:
-        parts.append(f"\n## Assessment context")
+        parts.append("\n## Assessment context")
         parts.append(f"{assessment.get('instrument', 'PHQ-9').upper()}: score {assessment.get('total_score', '?')}, severity: {assessment.get('severity', 'unknown')}")
 
     # Calendar triggers
     calendar = state.get("calendar_context", [])
     if calendar:
-        parts.append(f"\n## Upcoming events")
+        parts.append("\n## Upcoming events")
         for event in calendar:
             parts.append(f"- {event}")
 

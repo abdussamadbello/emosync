@@ -6,7 +6,6 @@ import json
 import logging
 import re
 from collections.abc import AsyncIterator
-from functools import lru_cache
 from typing import Any
 
 import websockets

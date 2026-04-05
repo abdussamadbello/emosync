@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import uuid
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
