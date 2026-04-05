@@ -1,28 +1,25 @@
 from __future__ import annotations
 
-from typing import Any, List
+from typing import Any
 
-from app.core.vector_store import LocalVectorStore
+from app.ingestion.vector_retriever import VectorRetriever
 
 
 class JournalRetriever:
-    """Local vector search (no DB)."""
+    """Database-backed retrieval for journal-like embedding chunks."""
 
-    def __init__(self):
-        self.store = LocalVectorStore()
+    def __init__(self) -> None:
+        self.retriever = VectorRetriever()
 
     async def search(
         self,
         query_embedding: list[float],
         user_id: str | None = None,
         limit: int = 5,
-    ) -> List[dict[str, Any]]:
-
-        results = self.store.search(query_embedding, limit=limit)
-
-        filtered = [
-            r for r in results
-            if r["metadata"].get("source") in ("journal", "cbt_pdf")
-        ]
-
-        return filtered
+    ) -> list[dict[str, Any]]:
+        return await self.retriever.search(
+            query_embedding,
+            top_k=limit,
+            user_id=user_id,
+            sources=("journal",),
+        )
