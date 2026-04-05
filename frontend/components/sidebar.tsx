@@ -11,6 +11,9 @@ import {
   ChevronRight,
   HelpCircle,
   CreditCard,
+  Trash2,
+  BookOpen,
+  Calendar,
 } from "lucide-react";
 import type { ConversationOut } from "@/lib/api";
 
@@ -23,6 +26,8 @@ interface SidebarProps {
   is_logged_in?: boolean;
   /** Called when the user clicks "New Chat" */
   on_new_chat?: () => void;
+  /** Called when the user deletes a conversation */
+  on_delete_chat?: (conversation_id: string) => void;
   /** List of conversations to display under "Your Chats" */
   conversations?: ConversationOut[];
   /** Id of the currently active conversation (highlighted) */
@@ -45,6 +50,7 @@ export function Sidebar({
   on_toggle,
   is_logged_in = false,
   on_new_chat,
+  on_delete_chat,
   conversations = [],
   active_conversation_id,
 }: SidebarProps) {
@@ -118,17 +124,34 @@ export function Sidebar({
                 conversations.map((conv) => {
                   const is_active = conv.id === active_conversation_id;
                   return (
-                    <Button
+                    <div
                       key={conv.id}
-                      variant={is_active ? "secondary" : "ghost"}
-                      className="w-full justify-start gap-3 px-3 text-sm"
-                      asChild
+                      className="group relative flex items-center"
                     >
-                      <Link href={`/c/${conv.id}`}>
-                        <MessageSquare className="size-4 shrink-0 text-muted-foreground" />
-                        <span className="truncate">{conversation_label(conv)}</span>
-                      </Link>
-                    </Button>
+                      <Button
+                        variant={is_active ? "secondary" : "ghost"}
+                        className="w-full justify-start gap-3 px-3 pr-8 text-sm"
+                        asChild
+                      >
+                        <Link href={`/c/${conv.id}`}>
+                          <MessageSquare className="size-4 shrink-0 text-muted-foreground" />
+                          <span className="truncate">{conversation_label(conv)}</span>
+                        </Link>
+                      </Button>
+                      {on_delete_chat && (
+                        <button
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            on_delete_chat(conv.id);
+                          }}
+                          title="Delete chat"
+                          className="absolute right-1.5 flex size-6 items-center justify-center rounded opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
+                        >
+                          <Trash2 className="size-3.5" />
+                        </button>
+                      )}
+                    </div>
                   );
                 })
               )}
@@ -146,6 +169,31 @@ export function Sidebar({
             <MessageSquare className="size-4 shrink-0" />
           </Button>
         )}
+
+        {/* Journal & Calendar links */}
+        <Button
+          variant="ghost"
+          className={`w-full justify-start gap-3 ${open ? "px-3" : "px-0 justify-center"}`}
+          title="Journal"
+          asChild
+        >
+          <Link href="/journal">
+            <BookOpen className="size-4 shrink-0" />
+            {open && <span className="truncate">Journal</span>}
+          </Link>
+        </Button>
+
+        <Button
+          variant="ghost"
+          className={`w-full justify-start gap-3 ${open ? "px-3" : "px-0 justify-center"}`}
+          title="Calendar"
+          asChild
+        >
+          <Link href="/calendar">
+            <Calendar className="size-4 shrink-0" />
+            {open && <span className="truncate">Calendar</span>}
+          </Link>
+        </Button>
       </nav>
 
       {/* Bottom links */}
