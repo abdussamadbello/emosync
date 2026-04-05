@@ -13,6 +13,8 @@ import {
   ArrowRight,
   LogOut,
   User,
+  BookOpen,
+  Target,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { Sidebar } from "@/components/sidebar";
@@ -33,6 +35,39 @@ import {
   type ConversationOut,
 } from "@/lib/api";
 import { read_sse_stream } from "@/lib/sse";
+
+// ── Suggest-tag helpers ───────────────────────────────────────────────────────
+
+function parse_suggest_tag(text: string): { clean_text: string; suggest: string | null } {
+  const match = text.match(/\[suggest:(journal|mood_check|assessment|goal_update)\]/);
+  if (!match) return { clean_text: text, suggest: null };
+  return {
+    clean_text: text.replace(match[0], "").trim(),
+    suggest: match[1],
+  };
+}
+
+function SuggestButton({ suggest }: { suggest: string }) {
+  const href = suggest === "journal" ? "/journal/new" : "/plan";
+  const label =
+    suggest === "journal"
+      ? "Open Journal"
+      : suggest === "goal_update"
+      ? "Update Goal"
+      : suggest === "assessment"
+      ? "Take Assessment"
+      : "Check Mood";
+  const Icon = suggest === "journal" ? BookOpen : Target;
+  return (
+    <Link
+      href={href}
+      className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-primary/30 bg-primary/5 px-3 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/10"
+    >
+      <Icon className="size-3.5" />
+      {label}
+    </Link>
+  );
+}
 
 interface ChatMessage {
   role: "user" | "assistant";
@@ -578,22 +613,32 @@ export function ChatView({ initial_conversation_id = null }: ChatViewProps) {
                         msg.role === "user" ? "justify-end" : "justify-start"
                       }`}
                     >
-                      <div
-                        className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
-                          msg.role === "user"
-                            ? "rounded-br-md bg-primary text-primary-foreground"
-                            : "rounded-bl-md bg-muted text-foreground"
-                        }`}
-                      >
-                        {msg.role === "assistant" && (
-                          <>
-                            <Sparkles className="mb-0.5 inline-block size-3.5 text-primary" />{" "}
-                          </>
-                        )}
-                        {msg.content}
-                        {msg.is_voice && (
-                          <Mic className="ml-1.5 mb-0.5 inline-block size-3 opacity-50" />
-                        )}
+                      <div className="flex flex-col items-start">
+                        <div
+                          className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
+                            msg.role === "user"
+                              ? "rounded-br-md bg-primary text-primary-foreground"
+                              : "rounded-bl-md bg-muted text-foreground"
+                          }`}
+                        >
+                          {msg.role === "assistant" && (
+                            <>
+                              <Sparkles className="mb-0.5 inline-block size-3.5 text-primary" />{" "}
+                            </>
+                          )}
+                          {msg.role === "assistant"
+                            ? parse_suggest_tag(msg.content).clean_text
+                            : msg.content}
+                          {msg.is_voice && (
+                            <Mic className="ml-1.5 mb-0.5 inline-block size-3 opacity-50" />
+                          )}
+                        </div>
+                        {msg.role === "assistant" &&
+                          parse_suggest_tag(msg.content).suggest && (
+                            <SuggestButton
+                              suggest={parse_suggest_tag(msg.content).suggest!}
+                            />
+                          )}
                       </div>
                     </div>
                   ))}
