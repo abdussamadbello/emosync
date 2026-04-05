@@ -8,11 +8,13 @@ import pytest
 from httpx import AsyncClient
 
 
-async def _register_and_get_token(client: AsyncClient, email: str) -> str:
+async def _register_and_get_token(client: AsyncClient, label: str) -> str:
+    email = f"{label}.{uuid.uuid4().hex[:12]}@example.com"
     r = await client.post(
         "/api/v1/auth/register",
         json={"email": email, "password": "secret1234"},
     )
+    assert r.status_code == 201, r.text
     return r.json()["access_token"]
 
 
@@ -20,7 +22,7 @@ async def _register_and_get_token(client: AsyncClient, email: str) -> str:
 async def test_create_conversation_and_stream_persists_messages(
     client: AsyncClient,
 ) -> None:
-    token = await _register_and_get_token(client, "chat_test@example.com")
+    token = await _register_and_get_token(client, "chat_test")
     headers = {"Authorization": f"Bearer {token}"}
 
     r = await client.post("/api/v1/conversations", json={}, headers=headers)
@@ -66,7 +68,7 @@ async def test_chat_routes_require_auth(client: AsyncClient) -> None:
 
 @pytest.mark.asyncio
 async def test_stream_unknown_conversation(client: AsyncClient) -> None:
-    token = await _register_and_get_token(client, "unknown_conv@example.com")
+    token = await _register_and_get_token(client, "unknown_conv")
     headers = {"Authorization": f"Bearer {token}"}
     bad = uuid.uuid4()
     async with client.stream(

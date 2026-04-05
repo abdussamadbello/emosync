@@ -2,15 +2,23 @@
 
 from __future__ import annotations
 
+import uuid
+
 import pytest
 from httpx import AsyncClient
 
 
+def _unique_email(local: str) -> str:
+    """Avoid 409 on repeated local runs against a persistent Postgres volume."""
+    return f"{local}.{uuid.uuid4().hex[:12]}@example.com"
+
+
 @pytest.mark.asyncio
 async def test_register_returns_token(client: AsyncClient) -> None:
+    email = _unique_email("alice")
     r = await client.post(
         "/api/v1/auth/register",
-        json={"email": "alice@example.com", "password": "secret1234"},
+        json={"email": email, "password": "secret1234"},
     )
     assert r.status_code == 201
     data = r.json()
@@ -20,13 +28,14 @@ async def test_register_returns_token(client: AsyncClient) -> None:
 
 @pytest.mark.asyncio
 async def test_register_duplicate_email(client: AsyncClient) -> None:
+    email = _unique_email("dup")
     await client.post(
         "/api/v1/auth/register",
-        json={"email": "dup@example.com", "password": "secret1234"},
+        json={"email": email, "password": "secret1234"},
     )
     r = await client.post(
         "/api/v1/auth/register",
-        json={"email": "dup@example.com", "password": "secret1234"},
+        json={"email": email, "password": "secret1234"},
     )
     assert r.status_code == 409
 
@@ -35,20 +44,21 @@ async def test_register_duplicate_email(client: AsyncClient) -> None:
 async def test_register_short_password(client: AsyncClient) -> None:
     r = await client.post(
         "/api/v1/auth/register",
-        json={"email": "short@example.com", "password": "123"},
+        json={"email": _unique_email("short"), "password": "123"},
     )
     assert r.status_code == 422
 
 
 @pytest.mark.asyncio
 async def test_login_success(client: AsyncClient) -> None:
+    email = _unique_email("login")
     await client.post(
         "/api/v1/auth/register",
-        json={"email": "login@example.com", "password": "secret1234"},
+        json={"email": email, "password": "secret1234"},
     )
     r = await client.post(
         "/api/v1/auth/login",
-        json={"email": "login@example.com", "password": "secret1234"},
+        json={"email": email, "password": "secret1234"},
     )
     assert r.status_code == 200
     assert "access_token" in r.json()
@@ -56,13 +66,14 @@ async def test_login_success(client: AsyncClient) -> None:
 
 @pytest.mark.asyncio
 async def test_login_wrong_password(client: AsyncClient) -> None:
+    email = _unique_email("wrong")
     await client.post(
         "/api/v1/auth/register",
-        json={"email": "wrong@example.com", "password": "secret1234"},
+        json={"email": email, "password": "secret1234"},
     )
     r = await client.post(
         "/api/v1/auth/login",
-        json={"email": "wrong@example.com", "password": "badpassword"},
+        json={"email": email, "password": "badpassword"},
     )
     assert r.status_code == 401
 
@@ -71,17 +82,18 @@ async def test_login_wrong_password(client: AsyncClient) -> None:
 async def test_login_nonexistent_user(client: AsyncClient) -> None:
     r = await client.post(
         "/api/v1/auth/login",
-        json={"email": "nobody@example.com", "password": "secret1234"},
+        json={"email": _unique_email("nobody"), "password": "secret1234"},
     )
     assert r.status_code == 401
 
 
 @pytest.mark.asyncio
 async def test_get_me(client: AsyncClient) -> None:
+    email = _unique_email("me")
     reg = await client.post(
         "/api/v1/auth/register",
         json={
-            "email": "me@example.com",
+            "email": email,
             "password": "secret1234",
             "display_name": "Test User",
         },
@@ -94,7 +106,7 @@ async def test_get_me(client: AsyncClient) -> None:
     )
     assert r.status_code == 200
     data = r.json()
-    assert data["email"] == "me@example.com"
+    assert data["email"] == email
     assert data["display_name"] == "Test User"
 
 
@@ -107,11 +119,13 @@ async def test_get_me_no_token(client: AsyncClient) -> None:
 # --- Chat routes now require JWT ---
 
 
-async def _register_and_get_token(client: AsyncClient, email: str) -> str:
+async def _register_and_get_token(client: AsyncClient, label: str) -> str:
+    email = _unique_email(label)
     r = await client.post(
         "/api/v1/auth/register",
         json={"email": email, "password": "secret1234"},
     )
+    assert r.status_code == 201, r.text
     return r.json()["access_token"]
 
 
@@ -123,7 +137,7 @@ async def test_create_conversation_requires_auth(client: AsyncClient) -> None:
 
 @pytest.mark.asyncio
 async def test_create_and_list_conversations(client: AsyncClient) -> None:
-    token = await _register_and_get_token(client, "chatlist@example.com")
+    token = await _register_and_get_token(client, "chatlist")
     headers = {"Authorization": f"Bearer {token}"}
 
     # Create two conversations
@@ -154,8 +168,8 @@ async def test_create_and_list_conversations(client: AsyncClient) -> None:
 
 @pytest.mark.asyncio
 async def test_conversation_isolation_between_users(client: AsyncClient) -> None:
-    token_a = await _register_and_get_token(client, "usera@example.com")
-    token_b = await _register_and_get_token(client, "userb@example.com")
+    token_a = await _register_and_get_token(client, "usera")
+    token_b = await _register_and_get_token(client, "userb")
 
     # User A creates a conversation
     r = await client.post(
@@ -182,7 +196,7 @@ async def test_conversation_isolation_between_users(client: AsyncClient) -> None
 
 @pytest.mark.asyncio
 async def test_stream_with_auth(client: AsyncClient) -> None:
-    token = await _register_and_get_token(client, "stream@example.com")
+    token = await _register_and_get_token(client, "stream")
     headers = {"Authorization": f"Bearer {token}"}
 
     r = await client.post(

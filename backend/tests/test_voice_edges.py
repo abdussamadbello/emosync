@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import pytest
+from starlette.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
+
 from app.main import app
 from app.schemas.voice import ServerEventType
 
@@ -13,19 +16,17 @@ def test_user_transcript_in_server_event_types():
     assert "user.transcript" in valid_types
 
 
-@pytest.mark.asyncio
-async def test_voice_ws_rejects_unauthenticated():
-    """WebSocket without auth should be closed with 1008 policy violation."""
-    from starlette.testclient import TestClient
+def test_voice_ws_rejects_unauthenticated() -> None:
+    """WebSocket without valid auth closes with 1008 after the post-handshake auth window."""
+    import uuid
 
-    with TestClient(app) as tc:
-        import uuid
-
-        fake_id = str(uuid.uuid4())
-        with pytest.raises(Exception):
-            # Starlette test client raises on policy close
-            with tc.websocket_connect(f"/api/v1/voice/ws/{fake_id}"):
-                pass
+    fake_id = str(uuid.uuid4())
+    with TestClient(app) as tc, tc.websocket_connect(f"/api/v1/voice/ws/{fake_id}") as ws:
+        # End handshake quickly so the server does not wait the full receive timeout.
+        ws.send_json({"type": "ping", "data": {}})
+        with pytest.raises(WebSocketDisconnect) as exc_info:
+            ws.receive_text()
+    assert exc_info.value.code == 1008
 
 
 class TestAudioBufferEdgeCases:
