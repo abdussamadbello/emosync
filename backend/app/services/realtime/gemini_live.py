@@ -202,6 +202,31 @@ class GeminiLiveVoiceBridge:
         except Exception:
             logger.exception("Failed to prime Gemini Live session with conversation history.")
 
+    async def send_greeting_prompt(self) -> None:
+        """Send a text prompt that triggers the AI to greet the user first.
+
+        Called after connect() for new conversations so the AI speaks
+        before the user does, like a therapist opening a session.
+        """
+        if not self._ws:
+            return
+        payload = {
+            "clientContent": {
+                "turns": [
+                    {
+                        "role": "user",
+                        "parts": [{"text": (
+                            "The user just joined the session. "
+                            "Greet them warmly and briefly — one or two sentences. "
+                            "Ask how they're doing today. Keep it natural and gentle."
+                        )}],
+                    }
+                ],
+                "turnComplete": True,
+            }
+        }
+        await self._ws.send(json.dumps(payload))
+
     async def _message_to_events(self, message: dict[str, Any]) -> AsyncIterator[VoiceServerEvent]:
         if message.get("goAway"):
             yield VoiceServerEvent(

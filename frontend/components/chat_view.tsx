@@ -584,30 +584,13 @@ export function ChatView({ initial_conversation_id = null }: ChatViewProps) {
             {/* Messages / welcome area */}
             <div className="relative flex flex-1 flex-col overflow-y-auto [scrollbar-width:thin] [scrollbar-color:hsl(var(--border))_transparent]">
               {!has_messages && (
-                <div className="flex flex-1 flex-col items-center justify-center gap-6 p-8">
-                  <div className="relative flex items-center justify-center">
-                    <div className="absolute size-28 animate-pulse rounded-full bg-primary/10 blur-xl" />
-                    <div className="absolute size-20 animate-[pulse_3s_ease-in-out_infinite] rounded-full bg-primary/15 blur-lg" />
-                    <div className="relative flex size-16 items-center justify-center rounded-full border border-primary/20 bg-gradient-to-br from-primary/10 to-primary/5">
-                      <Sparkles className="size-7 animate-[spin_6s_linear_infinite] text-primary/70" />
+                <div className="flex flex-1 flex-col items-end justify-end py-4">
+                  <div className="flex w-full justify-start px-4">
+                    <div className="max-w-[85%] rounded-2xl rounded-bl-md bg-muted px-5 py-3 text-[0.9375rem] leading-[1.7] shadow-sm text-foreground">
+                      <Sparkles className="mb-0.5 inline-block size-3.5 text-primary" />{" "}
+                      Hi{display_name ? ` ${display_name}` : ""}, I&apos;m here whenever you&apos;re ready to talk.
+                      How are you feeling today?
                     </div>
-                    <div className="absolute size-32 animate-[spin_8s_linear_infinite]">
-                      <span className="absolute top-0 left-1/2 size-1.5 -translate-x-1/2 rounded-full bg-primary/40" />
-                    </div>
-                    <div className="absolute size-36 animate-[spin_12s_linear_infinite_reverse]">
-                      <span className="absolute top-0 left-1/2 size-1 -translate-x-1/2 rounded-full bg-primary/30" />
-                    </div>
-                    <div className="absolute size-40 animate-[spin_10s_linear_infinite]">
-                      <span className="absolute bottom-0 left-1/2 size-1.5 -translate-x-1/2 rounded-full bg-primary/20" />
-                    </div>
-                  </div>
-                  <div className="text-center">
-                    <h2 className="text-2xl font-semibold tracking-tight text-foreground">
-                      Welcome to EmoSync
-                    </h2>
-                    <p className="mt-2 text-base text-muted-foreground">
-                      Your safe space for emotional wellness
-                    </p>
                   </div>
                 </div>
               )}

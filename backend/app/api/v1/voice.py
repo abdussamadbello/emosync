@@ -164,6 +164,10 @@ async def _stream_gemini_live_voice_session(
             ).model_dump()
         )
 
+        # If this is a new conversation (no history), have the AI greet first
+        if not conversation_history:
+            await bridge.send_greeting_prompt()
+
         forward_task = asyncio.create_task(
             _forward_gemini_live_events(
                 websocket=websocket,
