@@ -7,9 +7,10 @@ import uuid
 from collections.abc import AsyncIterator
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import delete as sa_delete, func, select, update
+from sqlalchemy import delete as sa_delete, desc, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agent.context import MAX_HISTORY_MESSAGES
 from app.api.deps import get_current_user
 from app.core.database import SessionLocal, get_db
 from app.models.conversation import Conversation
@@ -150,11 +151,12 @@ async def stream_message_turn(
     history_result = await db.execute(
         select(Message)
         .where(Message.conversation_id == conversation_id)
-        .order_by(Message.created_at.asc())
+        .order_by(desc(Message.created_at))
+        .limit(MAX_HISTORY_MESSAGES)
     )
     history = [
         {"role": m.role, "content": m.content}
-        for m in history_result.scalars().all()
+        for m in reversed(list(history_result.scalars().all()))
     ]
 
     async def event_stream() -> AsyncIterator[str]:

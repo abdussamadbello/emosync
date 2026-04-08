@@ -8,10 +8,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import AsyncIterator
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from app.agent.context import (
+    MAX_PROMPT_HISTORY_MESSAGES,
+    trim_conversation_history,
+    truncate_text,
+)
 from app.agent.llm import get_specialist_llm
 from app.agent.prompts import SPECIALIST_SYSTEM
 from app.agent.state import AgentState
@@ -35,11 +41,15 @@ def _build_specialist_prompt(state: AgentState) -> str:
     profile = state.get("user_profile", {})
     if profile:
         parts.append("\n## User profile")
-        parts.append(f"Grief type: {profile.get('grief_type', 'unknown')}")
-        parts.append(f"Support system: {profile.get('support_system', 'unknown')}")
+        parts.append(f"Grief type: {truncate_text(profile.get('grief_type', 'unknown'), 80)}")
+        parts.append(
+            f"Support system: {truncate_text(profile.get('support_system', 'unknown'), 80)}"
+        )
         approaches = profile.get('preferred_approaches', [])
         if approaches:
-            parts.append(f"Preferred approaches: {', '.join(approaches)}")
+            parts.append(
+                f"Preferred approaches: {truncate_text(', '.join(approaches[:3]), 120)}"
+            )
 
     assessment = state.get("assessment_context", {})
     if assessment:
@@ -48,9 +58,13 @@ def _build_specialist_prompt(state: AgentState) -> str:
 
     plan = state.get("treatment_plan", {})
     if plan:
-        parts.append(f"\n## Active treatment plan: {plan.get('title', 'Untitled')}")
-        for g in plan.get("goals", []):
-            parts.append(f"- [{g.get('status', '?')}] {g.get('description', '')}")
+        parts.append(
+            f"\n## Active treatment plan: {truncate_text(plan.get('title', 'Untitled'), 120)}"
+        )
+        for g in plan.get("goals", [])[:3]:
+            parts.append(
+                f"- [{g.get('status', '?')}] {truncate_text(g.get('description', ''), 140)}"
+            )
 
     moods = state.get("recent_moods", [])
     if moods:
@@ -60,14 +74,20 @@ def _build_specialist_prompt(state: AgentState) -> str:
             parts.append(f"\n## Recent mood trend: avg {avg:.1f}/10 over {len(scores)} entries")
 
     # Conversation history (last 10 turns)
-    history = state.get("conversation_history", [])
+    history = trim_conversation_history(
+        state.get("conversation_history", []),
+        max_messages=MAX_PROMPT_HISTORY_MESSAGES,
+    )
     if history:
         parts.append("\n## Recent conversation history")
-        for turn in history[-10:]:
+        for turn in history:
             parts.append(f"**{turn['role'].title()}**: {turn['content']}")
 
     # Current message
-    parts.append(f"\n## User's current message\n{state['user_message']}")
+    parts.append(f"\n## User's current message\n{truncate_text(state['user_message'], 900)}")
+    route_mode = state.get("route_mode")
+    if route_mode:
+        parts.append(f"\n## Response mode\n{route_mode}")
     parts.append(
         "\nRespond to the user using the most appropriate therapeutic framework(s). "
         "Be warm, concise (2-4 paragraphs), and ground your response in the "
@@ -101,3 +121,24 @@ async def specialist_node(state: AgentState) -> dict[str, Any]:
         specialist_response = fallback
 
     return {"specialist_response": specialist_response}
+
+
+async def stream_specialist(state: AgentState) -> AsyncIterator[str]:
+    """Stream the Specialist response token-by-token for low-risk turns."""
+    llm = get_specialist_llm()
+    prompt = _build_specialist_prompt(state)
+    messages = [SystemMessage(content=SPECIALIST_SYSTEM), HumanMessage(content=prompt)]
+
+    fallback = state.get(
+        "specialist_response",
+        "I hear you, and what you're feeling matters. What feels most important right now?",
+    )
+
+    try:
+        async for chunk in llm.astream(messages):
+            token = chunk.content
+            if token:
+                yield token
+    except Exception:
+        logger.exception("Specialist streaming failed; yielding fallback response.")
+        yield fallback

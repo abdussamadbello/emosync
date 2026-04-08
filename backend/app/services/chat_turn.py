@@ -9,6 +9,13 @@ from collections.abc import AsyncIterator
 from datetime import date, timedelta
 from typing import Any
 
+from app.agent.context import (
+    MAX_HISTORY_MESSAGES,
+    MAX_USER_MESSAGE_CHARS,
+    trim_conversation_history,
+    truncate_text,
+)
+from app.agent.routing import TurnRoute, decide_turn_route
 from app.core.config import settings
 
 """Agent integration boundary (M3 → M4).
@@ -20,6 +27,64 @@ local dev and CI work without an API key.
 """
 
 logger = logging.getLogger(__name__)
+
+
+def _prepare_turn_inputs(
+    *,
+    user_message: str,
+    conversation_history: list[dict[str, str]] | None,
+) -> tuple[str, list[dict[str, str]], TurnRoute]:
+    """Trim oversized context before routing the turn."""
+    trimmed_message = truncate_text(user_message, MAX_USER_MESSAGE_CHARS)
+    trimmed_history = trim_conversation_history(
+        conversation_history,
+        max_messages=MAX_HISTORY_MESSAGES,
+    )
+    route = decide_turn_route(trimmed_message, trimmed_history)
+    return trimmed_message, trimmed_history, route
+
+
+def _build_initial_state(
+    *,
+    user_message: str,
+    conversation_id: str,
+    conversation_history: list[dict[str, str]],
+    user_id: str | None,
+    route: TurnRoute,
+) -> dict[str, Any]:
+    return {
+        "user_message": user_message,
+        "conversation_id": conversation_id,
+        "conversation_history": conversation_history,
+        "calendar_context": [],
+        "journal_context": [],
+        "user_id": str(user_id) if user_id else "",
+        "route_mode": route.mode,
+        "route_reason": route.reason,
+        "use_retrieval": route.use_retrieval,
+    }
+
+
+async def _run_historian_if_needed(
+    state: dict[str, Any],
+    route: TurnRoute,
+) -> dict[str, Any]:
+    if not route.use_historian:
+        return state
+
+    from app.agent.nodes.historian import historian_node
+
+    updated = dict(state)
+    updated.update(await historian_node(updated))
+    return updated
+
+
+async def _run_specialist_response(state: dict[str, Any]) -> dict[str, Any]:
+    from app.agent.nodes.specialist import specialist_node
+
+    updated = dict(state)
+    updated.update(await specialist_node(updated))
+    return updated
 
 
 def _extract_suggestions(text: str) -> tuple[str, dict[str, Any] | None]:
@@ -125,20 +190,26 @@ async def run_turn_full(
     The text is always safe for display. Prosody is returned separately for
     voice synthesis pipelines. Suggestions is the parsed JSON block (or None).
     """
+    prepared_message, prepared_history, route = _prepare_turn_inputs(
+        user_message=user_message,
+        conversation_history=conversation_history,
+    )
+
     if not settings.gemini_api_key:
         text = await _stub_response_text(
-            user_message=user_message,
+            user_message=prepared_message,
             conversation_id=conversation_id,
             user_message_id=user_message_id,
         )
         return text, "gentle, warm tone", None
 
     final_text = await _agent_response_text(
-        user_message=user_message,
+        user_message=prepared_message,
         conversation_id=conversation_id,
         user_message_id=user_message_id,
-        conversation_history=conversation_history or [],
+        conversation_history=prepared_history,
         user_id=user_id,
+        route=route,
     )
 
     # Extract suggestions block before stripping prosody
@@ -206,20 +277,24 @@ async def stream_turn(
     user_id: str | None = None,
     result: StreamResult | None = None,
 ) -> AsyncIterator[str]:
-    """Yield tokens in real-time as the Anchor LLM generates them.
+    """Yield tokens in real time using the selected route for this turn.
 
-    Runs Historian → Specialist through the pre-anchor graph, then streams
-    the Anchor's output token-by-token.  Falls back to the stub in dev mode.
-
-    The caller can pass a ``StreamResult`` to collect the full text and
+    Low-risk turns stream directly from the Specialist. Higher-risk turns can
+    still route through Historian and/or Anchor before the client sees text.
+    The caller can pass a ``StreamResult`` to collect the final text and
     suggestions after the stream completes.
     """
     if result is None:
         result = StreamResult()
 
+    prepared_message, prepared_history, route = _prepare_turn_inputs(
+        user_message=user_message,
+        conversation_history=conversation_history,
+    )
+
     if not settings.gemini_api_key:
         text = await _stub_response_text(
-            user_message=user_message,
+            user_message=prepared_message,
             conversation_id=conversation_id,
             user_message_id=user_message_id,
         )
@@ -228,18 +303,8 @@ async def stream_turn(
             yield word + " "
         return
 
-    from app.agent.graph import pre_anchor_graph
     from app.agent.nodes.anchor import stream_anchor
-    from app.agent.state import AgentState
-
-    initial_state: AgentState = {
-        "user_message": user_message,
-        "conversation_id": conversation_id,
-        "conversation_history": conversation_history or [],
-        "calendar_context": [],
-        "journal_context": [],
-        "user_id": str(user_id) if user_id else "",
-    }
+    from app.agent.nodes.specialist import stream_specialist
 
     fallback = (
         "I hear you, and what you're feeling is completely valid. "
@@ -248,12 +313,23 @@ async def stream_turn(
     )
 
     try:
-        # Run Historian → Specialist (non-streaming)
-        pre_state = await pre_anchor_graph.ainvoke(initial_state)
+        initial_state = _build_initial_state(
+            user_message=prepared_message,
+            conversation_id=conversation_id,
+            conversation_history=prepared_history,
+            user_id=user_id,
+            route=route,
+        )
+        route_state = await _run_historian_if_needed(initial_state, route)
 
-        # Stream Anchor output token-by-token
         raw_chunks: list[str] = []
-        async for token in stream_anchor(pre_state):
+        if route.use_anchor:
+            route_state = await _run_specialist_response(route_state)
+            stream = stream_anchor(route_state)
+        else:
+            stream = stream_specialist(route_state)
+
+        async for token in stream:
             raw_chunks.append(token)
             yield token
 
@@ -285,23 +361,28 @@ async def _agent_response_text(
     user_message_id: str,
     conversation_history: list[dict[str, str]],
     user_id: str | None = None,
+    route: TurnRoute,
 ) -> str:
-    """Run the full Historian → Specialist → Anchor pipeline and return full text."""
-    from app.agent.graph import grief_coach_graph
-    from app.agent.state import AgentState
-
-    initial_state: AgentState = {
-        "user_message": user_message,
-        "conversation_id": conversation_id,
-        "conversation_history": conversation_history,
-        "calendar_context": [],
-        "journal_context": [],
-        "user_id": str(user_id) if user_id else "",
-    }
+    """Run the selected route and return full text."""
+    initial_state = _build_initial_state(
+        user_message=user_message,
+        conversation_id=conversation_id,
+        conversation_history=conversation_history,
+        user_id=user_id,
+        route=route,
+    )
 
     try:
-        result = await grief_coach_graph.ainvoke(initial_state)
-        final_text = result.get("final_response", "")
+        state = await _run_historian_if_needed(initial_state, route)
+        state = await _run_specialist_response(state)
+
+        if route.use_anchor:
+            from app.agent.nodes.anchor import anchor_node
+
+            state.update(await anchor_node(state))
+            final_text = str(state.get("final_response", ""))
+        else:
+            final_text = str(state.get("specialist_response", ""))
     except Exception:
         logger.exception("Agent pipeline failed; returning fallback.")
         final_text = (

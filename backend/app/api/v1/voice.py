@@ -10,6 +10,7 @@ import uuid
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
 from sqlalchemy import select
 
+from app.agent.context import MAX_HISTORY_MESSAGES
 from app.core.config import settings
 from app.core.database import SessionLocal
 from app.core.security import decode_access_token
@@ -62,9 +63,11 @@ async def _load_conversation_history(conversation_id: uuid.UUID) -> list[dict[st
         history_result = await session.execute(
             select(Message)
             .where(Message.conversation_id == conversation_id)
-            .order_by(Message.created_at.asc())
+            .order_by(Message.created_at.desc())
+            .limit(MAX_HISTORY_MESSAGES)
         )
-        return [{"role": m.role, "content": m.content} for m in history_result.scalars().all()]
+        messages = list(history_result.scalars().all())
+        return [{"role": m.role, "content": m.content} for m in reversed(messages)]
 
 
 async def _persist_turn(

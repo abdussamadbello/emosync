@@ -9,7 +9,9 @@ from __future__ import annotations
 import pytest
 
 from app.agent.state import AgentState
+from app.agent.context import trim_conversation_history
 from app.agent.prompts import HISTORIAN_SYSTEM, SPECIALIST_SYSTEM, ANCHOR_SYSTEM
+from app.agent.routing import decide_turn_route
 from app.agent.nodes.historian import _build_historian_prompt
 from app.agent.nodes.specialist import _build_specialist_prompt
 from app.agent.nodes.anchor import _build_anchor_prompt
@@ -78,6 +80,14 @@ class TestHistorianPromptBuilder:
             _sample_state(calendar_context=["Mom's birthday — March 30"])
         )
         assert "Mom's birthday" in prompt
+
+    def test_trims_long_history_in_prompt(self) -> None:
+        long_line = "x" * 600
+        prompt = _build_historian_prompt(
+            _sample_state(conversation_history=[{"role": "user", "content": long_line}] * 8)
+        )
+        assert len(prompt) < 4_500
+        assert "…" in prompt
 
 
 class TestSpecialistPromptBuilder:
@@ -215,3 +225,28 @@ class TestPromptIncludesSuggestions:
 
     def test_anchor_prompt_mentions_suggestions_validation(self) -> None:
         assert "Suggestions validation" in ANCHOR_SYSTEM
+
+
+class TestRouting:
+    def test_fast_route_for_low_intensity_turn(self) -> None:
+        route = decide_turn_route("thanks, that helps", [])
+        assert route.mode == "fast"
+        assert route.use_historian is False
+        assert route.use_anchor is False
+
+    def test_contextual_route_for_date_references(self) -> None:
+        route = decide_turn_route("My mom's birthday is next week and I'm dreading it", [])
+        assert route.mode in {"contextual", "full"}
+        assert route.use_historian is True
+
+    def test_full_route_for_crisis_language(self) -> None:
+        route = decide_turn_route("I don't want to live anymore", [])
+        assert route.use_anchor is True
+
+
+class TestContextBudget:
+    def test_trim_conversation_history_limits_count_and_size(self) -> None:
+        history = [{"role": "user", "content": "x" * 500} for _ in range(20)]
+        trimmed = trim_conversation_history(history, max_messages=4, max_chars_per_message=50)
+        assert len(trimmed) == 4
+        assert all(len(item["content"]) <= 50 for item in trimmed)

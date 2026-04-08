@@ -9,10 +9,15 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from app.agent.context import (
+    MAX_PROMPT_HISTORY_MESSAGES,
+    trim_conversation_history,
+    trim_string_list,
+    truncate_text,
+)
 from app.agent.llm import get_historian_llm
 from app.agent.prompts import HISTORIAN_SYSTEM
 from app.agent.state import AgentState
-from app.core.config import settings
 from app.mcp.calendar.service import CalendarService
 from app.mcp.journal.embedding import Embedder
 from app.ingestion.vector_retriever import VectorRetriever
@@ -112,33 +117,50 @@ async def _noop_list():
     return []
 
 
-def _build_historian_prompt(state: AgentState, query_chunks: list[str] | None = None) -> str:
+async def _noop_context_bundle() -> dict[str, Any]:
+    return {
+        "user_profile": None,
+        "assessment_context": None,
+        "treatment_plan": None,
+        "recent_moods": [],
+    }
+
+
+def _build_historian_prompt(
+    state: AgentState,
+    query_chunks: list[str] | None = None,
+    *,
+    calendar_context: list[str] | None = None,
+    journal_context: list[str] | None = None,
+) -> str:
     """Build the user-facing prompt for the Historian with available context."""
-    query_chunks = query_chunks or []
+    query_chunks = trim_string_list(query_chunks or [], max_items=2)
+    calendar_context = trim_string_list(calendar_context or state.get("calendar_context", []))
+    journal_context = trim_string_list(journal_context or state.get("journal_context", []))
     parts: list[str] = []
 
     # Conversation history (last 10 turns)
-    history = state.get("conversation_history", [])
+    history = trim_conversation_history(
+        state.get("conversation_history", []),
+        max_messages=MAX_PROMPT_HISTORY_MESSAGES,
+    )
     if history:
-        recent = history[-10:]
         parts.append("## Recent conversation")
-        for turn in recent:
+        for turn in history:
             parts.append(f"**{turn['role'].title()}**: {turn['content']}")
 
     # MCP Calendar context
-    calendar = state.get("calendar_context", [])
-    if calendar:
+    if calendar_context:
         parts.append("\n## Calendar events")
-        for event in calendar:
+        for event in calendar_context:
             parts.append(f"- {event}")
     else:
         parts.append("\n## Calendar events\nNo calendar data available yet (MCP not connected).")
 
     # MCP Journal context
-    journal = state.get("journal_context", [])
-    if journal:
+    if journal_context:
         parts.append("\n## Journal & CBT snippets")
-        for snippet in journal:
+        for snippet in journal_context:
             parts.append(f"- {snippet}")
     else:
         parts.append("\n## Journal & CBT snippets\nNo journal data available yet (MCP not connected).")
@@ -150,7 +172,9 @@ def _build_historian_prompt(state: AgentState, query_chunks: list[str] | None = 
             parts.append(f"- {chunk}")
 
     # Current user message
-    parts.append(f"\n## Current user message\n{state.get('user_message', '')}")
+    parts.append(
+        f"\n## Current user message\n{truncate_text(state.get('user_message', ''), 800)}"
+    )
     parts.append(
         "\nProvide your contextual briefing as JSON with keys "
         '"date_insights" and "journal_insights".'
@@ -177,35 +201,44 @@ def _extract_json_from_llm_response(content: str) -> dict:
 async def historian_node(state: AgentState) -> dict[str, Any]:
     """Run the Historian agent to gather contextual briefing."""
     user_message = state.get("user_message", "")
+    use_retrieval = bool(state.get("use_retrieval", True))
 
-    # Embed once, then run all retrievals in parallel.
-    query_embedding = await _embed_user_message(user_message)
+    # Embed once only when retrieval is on.
+    query_embedding = await _embed_user_message(user_message) if use_retrieval else None
 
     calendar_service = CalendarService()
 
     user_id = state.get("user_id", "")
 
-    journal_results, query_chunks, calendar_ctx, profile, phq9, plan, moods = await asyncio.gather(
-        retrieve_journal_context(user_message, query_embedding=query_embedding),
-        retrieve_relevant_chunks(user_message, top_k=5, query_embedding=query_embedding),
+    journal_results, query_chunks, calendar_ctx, context_bundle = await asyncio.gather(
+        retrieve_journal_context(user_message, query_embedding=query_embedding)
+        if use_retrieval
+        else _noop_list(),
+        retrieve_relevant_chunks(user_message, top_k=3, query_embedding=query_embedding)
+        if use_retrieval
+        else _noop_list(),
         _load_calendar_context(calendar_service, state),
-        therapeutic_context.get_profile(user_id) if user_id else _noop_none(),
-        therapeutic_context.get_latest_assessment(user_id, "phq9") if user_id else _noop_none(),
-        therapeutic_context.get_active_plan(user_id) if user_id else _noop_none(),
-        therapeutic_context.get_recent_moods(user_id) if user_id else _noop_list(),
+        therapeutic_context.get_context_bundle(user_id) if user_id else _noop_context_bundle(),
     )
 
     # Use DB-loaded calendar context, falling back to state
-    calendar_context = calendar_ctx if calendar_ctx else state.get("calendar_context", [])
+    calendar_context = trim_string_list(
+        calendar_ctx if calendar_ctx else state.get("calendar_context", [])
+    )
 
-    journal_context = [
-        f"{item['content']} (score={round(item['score'], 3)})"
+    journal_context = trim_string_list([
+        f"{truncate_text(item['content'], 180)} (score={round(item['score'], 3)})"
         for item in journal_results
-    ]
+    ])
 
     llm = get_historian_llm()
 
-    prompt = _build_historian_prompt(state, query_chunks)
+    prompt = _build_historian_prompt(
+        state,
+        query_chunks,
+        calendar_context=calendar_context,
+        journal_context=journal_context,
+    )
     messages = [SystemMessage(content=HISTORIAN_SYSTEM), HumanMessage(content=prompt)]
 
     response_content: str | None = None
@@ -245,10 +278,10 @@ async def historian_node(state: AgentState) -> dict[str, Any]:
     return {
         "calendar_context": calendar_context,
         "journal_context": journal_context,
-        "cbt_chunks": query_chunks,
+        "cbt_chunks": trim_string_list(query_chunks, max_items=2),
         "historian_briefing": briefing,
-        "user_profile": profile or {},
-        "assessment_context": phq9 or {},
-        "treatment_plan": plan or {},
-        "recent_moods": moods or [],
+        "user_profile": context_bundle.get("user_profile") or {},
+        "assessment_context": context_bundle.get("assessment_context") or {},
+        "treatment_plan": context_bundle.get("treatment_plan") or {},
+        "recent_moods": context_bundle.get("recent_moods") or [],
     }

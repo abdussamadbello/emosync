@@ -13,6 +13,7 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from app.agent.context import trim_string_list, truncate_text
 from app.agent.llm import get_anchor_llm
 from app.agent.prompts import ANCHOR_SYSTEM
 from app.agent.state import AgentState
@@ -27,7 +28,7 @@ def _build_anchor_prompt(state: AgentState) -> str:
     parts: list[str] = []
 
     # Original user message
-    parts.append(f"## User's message\n{state['user_message']}")
+    parts.append(f"## User's message\n{truncate_text(state['user_message'], 900)}")
 
     # Historian briefing (so Anchor can verify no hallucinated context)
     briefing = state.get("historian_briefing", {})
@@ -36,7 +37,9 @@ def _build_anchor_prompt(state: AgentState) -> str:
     parts.append(f"**Journal insights:** {briefing.get('journal_insights', 'None available.')}")
 
     # Specialist draft
-    parts.append(f"\n## Specialist's draft response\n{state.get('specialist_response', '')}")
+    parts.append(
+        f"\n## Specialist's draft response\n{truncate_text(state.get('specialist_response', ''), 1_500)}"
+    )
 
     # Assessment context for escalation
     assessment = state.get("assessment_context", {})
@@ -45,7 +48,7 @@ def _build_anchor_prompt(state: AgentState) -> str:
         parts.append(f"{assessment.get('instrument', 'PHQ-9').upper()}: score {assessment.get('total_score', '?')}, severity: {assessment.get('severity', 'unknown')}")
 
     # Calendar triggers
-    calendar = state.get("calendar_context", [])
+    calendar = trim_string_list(state.get("calendar_context", []))
     if calendar:
         parts.append(f"\n## Upcoming events")
         for event in calendar:

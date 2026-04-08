@@ -16,6 +16,9 @@ class AgentState(TypedDict, total=False):
     conversation_id: str
     # Prior turns for context: list of {"role": "user"|"assistant", "content": str}
     conversation_history: list[dict[str, str]]
+    route_mode: str
+    route_reason: str
+    use_retrieval: bool
 
     # --- Historian outputs ---
     # Calendar events near today (stub until MCP is wired)
