@@ -13,6 +13,7 @@ from app.agent.prompts import HISTORIAN_SYSTEM, SPECIALIST_SYSTEM, ANCHOR_SYSTEM
 from app.agent.nodes.historian import _build_historian_prompt
 from app.agent.nodes.specialist import _build_specialist_prompt
 from app.agent.nodes.anchor import _build_anchor_prompt
+from app.services.chat_turn import _extract_suggestions
 
 
 def _sample_state(**overrides: object) -> AgentState:
@@ -149,3 +150,68 @@ class TestGraphStructure:
         assert "historian" in node_names
         assert "specialist" in node_names
         assert "anchor" in node_names
+
+
+class TestExtractSuggestions:
+    def test_extracts_valid_suggestions_block(self) -> None:
+        text = (
+            "I hear you. That sounds really difficult.\n\n"
+            '```suggestions\n'
+            '{"micro_suggestion": {"title": "Box Breathing", "framework": "act", '
+            '"description": "Breathe in for 4, hold for 4, out for 4.", '
+            '"rationale": "You mentioned feeling anxious."}, '
+            '"plan_generation": null}\n'
+            '```'
+        )
+        clean, suggestions = _extract_suggestions(text)
+        assert "Box Breathing" not in clean
+        assert "I hear you" in clean
+        assert suggestions is not None
+        assert suggestions["micro_suggestion"]["title"] == "Box Breathing"
+        assert suggestions["plan_generation"] is None
+
+    def test_returns_none_for_no_block(self) -> None:
+        text = "I understand what you're going through."
+        clean, suggestions = _extract_suggestions(text)
+        assert clean == text
+        assert suggestions is None
+
+    def test_returns_none_for_malformed_json(self) -> None:
+        text = "Hello.\n\n```suggestions\n{invalid json}\n```"
+        clean, suggestions = _extract_suggestions(text)
+        assert "Hello." in clean
+        assert suggestions is None
+
+    def test_extracts_plan_generation(self) -> None:
+        text = (
+            "Based on your assessment, here's what I'd suggest.\n\n"
+            '```suggestions\n'
+            '{"micro_suggestion": null, "plan_generation": {"title": "Healing Path", '
+            '"goals": [{"description": "Practice grounding", "target_date": "2026-05-08", '
+            '"framework": "act"}]}}\n'
+            '```'
+        )
+        clean, suggestions = _extract_suggestions(text)
+        assert suggestions is not None
+        assert suggestions["plan_generation"]["title"] == "Healing Path"
+        assert len(suggestions["plan_generation"]["goals"]) == 1
+
+    def test_preserves_text_before_block(self) -> None:
+        text = (
+            "First paragraph.\n\nSecond paragraph.\n\n"
+            '```suggestions\n{"micro_suggestion": null, "plan_generation": null}\n```'
+        )
+        clean, suggestions = _extract_suggestions(text)
+        assert "First paragraph." in clean
+        assert "Second paragraph." in clean
+        assert suggestions is not None
+
+
+class TestPromptIncludesSuggestions:
+    def test_specialist_prompt_mentions_suggestions(self) -> None:
+        assert "suggestions" in SPECIALIST_SYSTEM
+        assert "micro_suggestion" in SPECIALIST_SYSTEM
+        assert "plan_generation" in SPECIALIST_SYSTEM
+
+    def test_anchor_prompt_mentions_suggestions_validation(self) -> None:
+        assert "Suggestions validation" in ANCHOR_SYSTEM

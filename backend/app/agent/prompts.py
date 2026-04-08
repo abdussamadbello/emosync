@@ -71,7 +71,56 @@ end of your response (after your main text, before any prosody hint):
 - [suggest:assessment] — when 2+ weeks since last assessment
 - [suggest:goal_update] — when user discusses progress on a known treatment goal
 
-Only include a tag if it genuinely fits the moment. Most responses need no tag.\
+Only include a tag if it genuinely fits the moment. Most responses need no tag.
+
+## Structured suggestions
+
+After your main response text (and any [suggest:*] tag), emit a fenced \
+suggestions block in this exact format:
+
+```suggestions
+{
+  "micro_suggestion": {
+    "title": "short exercise name",
+    "framework": "cbt" | "act" | "narrative",
+    "description": "the actual exercise in 1-3 sentences",
+    "rationale": "why this exercise, why now — personalised to the user's context"
+  },
+  "plan_generation": null
+}
+```
+
+Rules for micro_suggestion:
+- Include when the moment genuinely calls for a coping strategy, grounding \
+  exercise, breathing technique, reframe, or values exercise.
+- Set to null when the user needs to be heard (venting, acute grief, just \
+  sharing). Around 40-60% of responses should include one.
+- The description must be actionable — tell the user exactly what to do.
+- The rationale must reference the user's specific situation, not be generic.
+
+Rules for plan_generation:
+- ONLY emit when the assessment context includes "just_completed": true.
+- Generate a title (e.g. "Healing Path — Month Year") and 3-5 goals.
+- Each goal has: "description" (actionable, therapeutically grounded), \
+  "target_date" (ISO date, 30-60 days from today), "framework" (cbt/act/narrative).
+- Set to null in all other cases (this is the vast majority of responses).
+
+Example plan_generation:
+```json
+{
+  "plan_generation": {
+    "title": "Healing Path — April 2026",
+    "goals": [
+      {"description": "Practice one grounding exercise daily when anxiety peaks", "target_date": "2026-05-08", "framework": "act"},
+      {"description": "Identify and challenge 3 catastrophising thoughts per week", "target_date": "2026-05-08", "framework": "cbt"},
+      {"description": "Write a weekly journal entry re-authoring one positive memory", "target_date": "2026-06-08", "framework": "narrative"}
+    ]
+  }
+}
+```
+
+NEVER include suggestions during crisis or acute distress — only validation \
+and crisis resources in those moments.\
 """
 
 ANCHOR_SYSTEM = """\
@@ -107,7 +156,21 @@ these criteria before it reaches the user:
 8. **Calendar sensitivity** — If an anniversary or trigger event is within 3 \
    days, use extra-gentle tone and validate the difficulty of that time.
 
+9. **Suggestions validation** — If the Specialist's draft includes a \
+   ```suggestions block, validate:
+   - NO suggestions during crisis (PHQ-9 >= 20 or self-harm indicators). \
+     Remove the entire suggestions block in these cases.
+   - The rationale in micro_suggestion must be personalised to the user's \
+     specific situation, not generic advice. If it is generic, remove it.
+   - The framework should match the therapeutic approach used in the \
+     conversation. If mismatched, remove the suggestion.
+   - If any part of the suggestions block is invalid, remove the entire \
+     block rather than trying to fix it.
+   - If the suggestions block is valid, pass it through unchanged after \
+     your polished response text.
+
 Output the final, polished response ready for the user. Do NOT add meta \
 commentary like "Here is the revised response" — just output the response \
-itself, ending with the prosody hint in brackets.\
+itself, ending with the prosody hint in brackets. If a valid suggestions \
+block is present, include it after the prosody hint.\
 """

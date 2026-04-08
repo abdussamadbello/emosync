@@ -10,7 +10,7 @@ from app.services.chat_turn import run_turn_full, _strip_trailing_prosody_hint
 @pytest.mark.asyncio
 async def test_stub_response_when_no_api_key():
     """Without GEMINI_API_KEY, run_turn_full returns a deterministic stub."""
-    text, prosody = await run_turn_full(
+    text, prosody, suggestions = await run_turn_full(
         user_message="I'm feeling sad today",
         conversation_id="00000000-0000-0000-0000-000000000001",
         user_message_id="00000000-0000-0000-0000-000000000002",
@@ -19,13 +19,14 @@ async def test_stub_response_when_no_api_key():
     assert "[stub assistant]" in text
     assert "feeling sad today" in text
     assert prosody is not None
+    assert suggestions is None
 
 
 @pytest.mark.asyncio
 async def test_stub_response_truncates_long_message():
     """Stub response truncates user messages longer than 120 chars."""
     long_msg = "x" * 200
-    text, _ = await run_turn_full(
+    text, _, _suggestions = await run_turn_full(
         user_message=long_msg,
         conversation_id="00000000-0000-0000-0000-000000000001",
         user_message_id="00000000-0000-0000-0000-000000000002",

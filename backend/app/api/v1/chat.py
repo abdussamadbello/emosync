@@ -21,7 +21,7 @@ from app.schemas.chat import (
     MessageOut,
     StreamTurnRequest,
 )
-from app.services.chat_turn import run_turn
+from app.services.chat_turn import run_turn_full
 
 logger = logging.getLogger(__name__)
 
@@ -161,17 +161,21 @@ async def stream_message_turn(
         yield _sse(
             "meta", {"conversation_id": cid_str, "user_message_id": user_message_id}
         )
-        chunks: list[str] = []
         try:
-            async for fragment in run_turn(
+            full, _prosody, suggestions = await run_turn_full(
                 user_message=content,
                 conversation_id=cid_str,
                 user_message_id=user_message_id,
                 conversation_history=history,
-            ):
-                chunks.append(fragment)
-                yield _sse("token", {"text": fragment})
-            full = "".join(chunks)
+                user_id=str(current_user.id),
+            )
+
+            # Stream word-by-word for SSE token events
+            words = full.split()
+            for i, word in enumerate(words):
+                token = word + (" " if i < len(words) - 1 else "")
+                yield _sse("token", {"text": token})
+
             async with SessionLocal() as session:
                 async with session.begin():
                     session.add(
@@ -186,6 +190,11 @@ async def stream_message_turn(
                         .where(Conversation.id == conversation_id)
                         .values(updated_at=func.now())
                     )
+
+            # Emit suggestions event before done (if any)
+            if suggestions:
+                yield _sse("suggestions", suggestions)
+
             yield _sse("done", {"assistant_text": full})
         except asyncio.TimeoutError:
             logger.error("Assistant stream timed out")

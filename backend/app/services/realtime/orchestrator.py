@@ -21,7 +21,7 @@ class VoiceOrchestrator:
         user_message_id: uuid.UUID,
         conversation_history: list[dict[str, str]],
     ) -> AsyncIterator[VoiceServerEvent]:
-        assistant_text, prosody_hint = await run_turn_full(
+        assistant_text, prosody_hint, _suggestions = await run_turn_full(
             user_message=transcript,
             conversation_id=str(conversation_id),
             user_message_id=str(user_message_id),

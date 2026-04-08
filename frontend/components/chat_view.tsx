@@ -71,10 +71,79 @@ function ChatActionButton({ suggest, onClick }: { suggest: string; onClick: () =
   );
 }
 
+const FRAMEWORK_LABELS: Record<string, string> = {
+  cbt: "CBT",
+  act: "ACT",
+  narrative: "Narrative",
+};
+
+function MicroSuggestionCard({
+  suggestion,
+}: {
+  suggestion: NonNullable<SuggestionData["micro_suggestion"]>;
+}) {
+  return (
+    <div className="mt-2 max-w-[85%] rounded-xl border border-primary/20 bg-primary/5 px-4 py-3 text-sm">
+      <div className="flex items-center gap-2">
+        <Sparkles className="size-3.5 text-primary" />
+        <span className="font-medium text-foreground">{suggestion.title}</span>
+        <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[0.65rem] font-semibold uppercase tracking-wider text-primary">
+          {FRAMEWORK_LABELS[suggestion.framework] ?? suggestion.framework}
+        </span>
+      </div>
+      <p className="mt-1.5 leading-relaxed text-foreground/90">{suggestion.description}</p>
+      <p className="mt-1 text-xs italic text-muted-foreground">{suggestion.rationale}</p>
+    </div>
+  );
+}
+
+function PlanGeneratedCard({
+  plan,
+}: {
+  plan: NonNullable<SuggestionData["plan_generation"]>;
+}) {
+  return (
+    <div className="mt-2 max-w-[85%] rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-3 text-sm">
+      <div className="flex items-center gap-2">
+        <Target className="size-3.5 text-emerald-600 dark:text-emerald-400" />
+        <span className="font-medium text-foreground">{plan.title}</span>
+      </div>
+      <p className="mt-1 text-foreground/80">
+        {plan.goals.length} goal{plan.goals.length === 1 ? "" : "s"} created for your healing journey
+      </p>
+      <ul className="mt-2 space-y-1">
+        {plan.goals.map((goal, i) => (
+          <li key={i} className="flex items-start gap-1.5 text-xs text-foreground/70">
+            <span className="mt-0.5 size-1.5 shrink-0 rounded-full bg-emerald-500/40" />
+            {goal.description}
+          </li>
+        ))}
+      </ul>
+      <p className="mt-2 text-[0.65rem] text-muted-foreground">
+        Created based on your assessment. You can edit or remove goals anytime.
+      </p>
+    </div>
+  );
+}
+
+interface SuggestionData {
+  micro_suggestion?: {
+    title: string;
+    framework: "cbt" | "act" | "narrative";
+    description: string;
+    rationale: string;
+  } | null;
+  plan_generation?: {
+    title: string;
+    goals: { description: string; target_date: string; framework: string }[];
+  } | null;
+}
+
 interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   is_voice?: boolean;
+  suggestions?: SuggestionData | null;
 }
 
 interface ChatViewProps {
@@ -452,6 +521,16 @@ export function ChatView({ initial_conversation_id = null }: ChatViewProps) {
             }
             return updated;
           });
+        } else if (evt.event === "suggestions") {
+          const suggestions_data = evt.data as unknown as SuggestionData;
+          setMessages((prev) => {
+            const updated = [...prev];
+            const last = updated[updated.length - 1];
+            if (last?.role === "assistant") {
+              updated[updated.length - 1] = { ...last, suggestions: suggestions_data };
+            }
+            return updated;
+          });
         } else if (evt.event === "done") {
           void load_conversations(token);
         } else if (evt.event === "error") {
@@ -624,6 +703,13 @@ export function ChatView({ initial_conversation_id = null }: ChatViewProps) {
                             <Mic className="ml-1.5 mb-0.5 inline-block size-3 opacity-50" />
                           )}
                         </div>
+                        {/* Inline suggestion cards */}
+                        {msg.role === "assistant" && msg.suggestions?.micro_suggestion && (
+                          <MicroSuggestionCard suggestion={msg.suggestions.micro_suggestion} />
+                        )}
+                        {msg.role === "assistant" && msg.suggestions?.plan_generation && (
+                          <PlanGeneratedCard plan={msg.suggestions.plan_generation} />
+                        )}
                         {msg.role === "assistant" && (() => {
                           const { suggest } = parse_suggest_tag(msg.content);
                           if (!suggest) return null;

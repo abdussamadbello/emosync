@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
+import uuid
 from collections.abc import AsyncIterator
+from datetime import date, timedelta
+from typing import Any
 
 from app.core.config import settings
 
@@ -16,6 +20,69 @@ local dev and CI work without an API key.
 """
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_suggestions(text: str) -> tuple[str, dict[str, Any] | None]:
+    """Split the suggestions JSON block from the response text.
+
+    Returns (clean_text, suggestions_dict). If no valid block is found,
+    suggestions_dict is None and clean_text is the original text.
+    """
+    pattern = r"```suggestions\s*\n(.*?)```"
+    match = re.search(pattern, text, re.DOTALL)
+    if not match:
+        return text, None
+
+    clean = text[: match.start()].rstrip()
+    try:
+        suggestions = json.loads(match.group(1).strip())
+        return clean, suggestions
+    except (json.JSONDecodeError, ValueError):
+        logger.warning("Malformed suggestions block; ignoring.")
+        return clean, None
+
+
+async def _persist_plan(user_id: str, plan_data: dict[str, Any]) -> None:
+    """Save an AI-generated treatment plan to the database.
+
+    Marks any existing active plan as completed before creating the new one.
+    """
+    from app.core.database import get_async_session
+    from app.models.treatment_plan import TreatmentGoal, TreatmentPlan
+
+    uid = uuid.UUID(user_id)
+    title = plan_data.get("title", "Healing Plan")
+    goals = plan_data.get("goals", [])
+
+    async with get_async_session() as session:
+        async with session.begin():
+            # Mark existing active plans as completed
+            from sqlalchemy import update
+            await session.execute(
+                update(TreatmentPlan)
+                .where(TreatmentPlan.user_id == uid, TreatmentPlan.status == "active")
+                .values(status="completed")
+            )
+
+            plan = TreatmentPlan(user_id=uid, title=title, status="active")
+            session.add(plan)
+            await session.flush()
+
+            for goal in goals:
+                target = None
+                if goal.get("target_date"):
+                    try:
+                        target = date.fromisoformat(goal["target_date"])
+                    except ValueError:
+                        target = date.today() + timedelta(days=30)
+                session.add(
+                    TreatmentGoal(
+                        plan_id=plan.id,
+                        description=goal.get("description", ""),
+                        target_date=target,
+                        status="not_started",
+                    )
+                )
 
 
 async def run_turn(
@@ -31,7 +98,7 @@ async def run_turn(
     When GEMINI_API_KEY is set, the full agentic pipeline is used.
     Otherwise a deterministic stub is returned (useful for tests / local dev).
     """
-    text, _prosody_hint = await run_turn_full(
+    text, _prosody_hint, _suggestions = await run_turn_full(
         user_message=user_message,
         conversation_id=conversation_id,
         user_message_id=user_message_id,
@@ -52,11 +119,11 @@ async def run_turn_full(
     user_message_id: str,
     conversation_history: list[dict[str, str]] | None = None,
     user_id: str | None = None,
-) -> tuple[str, str | None]:
-    """Return assistant text and optional prosody hint.
+) -> tuple[str, str | None, dict[str, Any] | None]:
+    """Return (display_text, prosody_hint, suggestions).
 
     The text is always safe for display. Prosody is returned separately for
-    voice synthesis pipelines.
+    voice synthesis pipelines. Suggestions is the parsed JSON block (or None).
     """
     if not settings.gemini_api_key:
         text = await _stub_response_text(
@@ -64,7 +131,7 @@ async def run_turn_full(
             conversation_id=conversation_id,
             user_message_id=user_message_id,
         )
-        return text, "gentle, warm tone"
+        return text, "gentle, warm tone", None
 
     final_text = await _agent_response_text(
         user_message=user_message,
@@ -73,8 +140,19 @@ async def run_turn_full(
         conversation_history=conversation_history or [],
         user_id=user_id,
     )
-    cleaned, prosody = _strip_trailing_prosody_hint(final_text)
-    return cleaned, prosody
+
+    # Extract suggestions block before stripping prosody
+    text_no_suggestions, suggestions = _extract_suggestions(final_text)
+    cleaned, prosody = _strip_trailing_prosody_hint(text_no_suggestions)
+
+    # Persist auto-generated plan if present
+    if suggestions and suggestions.get("plan_generation") and user_id:
+        try:
+            await _persist_plan(user_id, suggestions["plan_generation"])
+        except Exception:
+            logger.exception("Failed to persist auto-generated plan.")
+
+    return cleaned, prosody, suggestions
 
 
 async def _stub_response(
