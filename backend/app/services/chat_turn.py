@@ -189,30 +189,93 @@ async def _stub_response_text(
     )
 
 
-async def _agent_response(
+class StreamResult:
+    """Accumulates streamed tokens and post-stream metadata."""
+
+    def __init__(self) -> None:
+        self.full_text: str = ""
+        self.suggestions: dict[str, Any] | None = None
+
+
+async def stream_turn(
     *,
     user_message: str,
     conversation_id: str,
     user_message_id: str,
-    conversation_history: list[dict[str, str]],
+    conversation_history: list[dict[str, str]] | None = None,
+    user_id: str | None = None,
+    result: StreamResult | None = None,
 ) -> AsyncIterator[str]:
-    """Run the full Historian → Specialist → Anchor pipeline via LangGraph."""
-    final_text = await _agent_response_text(
-        user_message=user_message,
-        conversation_id=conversation_id,
-        user_message_id=user_message_id,
-        conversation_history=conversation_history,
+    """Yield tokens in real-time as the Anchor LLM generates them.
+
+    Runs Historian → Specialist through the pre-anchor graph, then streams
+    the Anchor's output token-by-token.  Falls back to the stub in dev mode.
+
+    The caller can pass a ``StreamResult`` to collect the full text and
+    suggestions after the stream completes.
+    """
+    if result is None:
+        result = StreamResult()
+
+    if not settings.gemini_api_key:
+        text = await _stub_response_text(
+            user_message=user_message,
+            conversation_id=conversation_id,
+            user_message_id=user_message_id,
+        )
+        result.full_text = text
+        for word in text.split():
+            yield word + " "
+        return
+
+    from app.agent.graph import pre_anchor_graph
+    from app.agent.nodes.anchor import stream_anchor
+    from app.agent.state import AgentState
+
+    initial_state: AgentState = {
+        "user_message": user_message,
+        "conversation_id": conversation_id,
+        "conversation_history": conversation_history or [],
+        "calendar_context": [],
+        "journal_context": [],
+        "user_id": str(user_id) if user_id else "",
+    }
+
+    fallback = (
+        "I hear you, and what you're feeling is completely valid. "
+        "I'm having a brief difficulty, but I'm still here with you. "
+        "Could you tell me a bit more about what's on your mind?"
     )
 
-    # Strip prosody hint before streaming to text (e.g. "[speak slowly, warm tone]")
-    cleaned_text, _prosody = _strip_trailing_prosody_hint(final_text)
+    try:
+        # Run Historian → Specialist (non-streaming)
+        pre_state = await pre_anchor_graph.ainvoke(initial_state)
 
-    # Stream word-by-word for SSE token events
-    words = cleaned_text.split()
-    for i, word in enumerate(words):
-        token = word + (" " if i < len(words) - 1 else "")
-        yield token
-        await asyncio.sleep(0.01)
+        # Stream Anchor output token-by-token
+        raw_chunks: list[str] = []
+        async for token in stream_anchor(pre_state):
+            raw_chunks.append(token)
+            yield token
+
+        raw_text = "".join(raw_chunks)
+    except Exception:
+        logger.exception("Streaming pipeline failed; returning fallback.")
+        raw_text = fallback
+        yield fallback
+
+    # Post-stream: extract suggestions and prosody from the accumulated text
+    text_no_suggestions, suggestions = _extract_suggestions(raw_text)
+    cleaned, _prosody = _strip_trailing_prosody_hint(text_no_suggestions)
+
+    result.full_text = cleaned
+    result.suggestions = suggestions
+
+    # Persist plan if generated
+    if suggestions and suggestions.get("plan_generation") and user_id:
+        try:
+            await _persist_plan(user_id, suggestions["plan_generation"])
+        except Exception:
+            logger.exception("Failed to persist auto-generated plan.")
 
 
 async def _agent_response_text(

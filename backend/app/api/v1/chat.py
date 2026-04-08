@@ -21,7 +21,7 @@ from app.schemas.chat import (
     MessageOut,
     StreamTurnRequest,
 )
-from app.services.chat_turn import run_turn_full
+from app.services.chat_turn import StreamResult, stream_turn
 
 logger = logging.getLogger(__name__)
 
@@ -162,20 +162,18 @@ async def stream_message_turn(
             "meta", {"conversation_id": cid_str, "user_message_id": user_message_id}
         )
         try:
-            full, _prosody, suggestions = await run_turn_full(
+            result = StreamResult()
+            async for token in stream_turn(
                 user_message=content,
                 conversation_id=cid_str,
                 user_message_id=user_message_id,
                 conversation_history=history,
                 user_id=str(current_user.id),
-            )
-
-            # Stream word-by-word for SSE token events
-            words = full.split()
-            for i, word in enumerate(words):
-                token = word + (" " if i < len(words) - 1 else "")
+                result=result,
+            ):
                 yield _sse("token", {"text": token})
 
+            full = result.full_text
             async with SessionLocal() as session:
                 async with session.begin():
                     session.add(
@@ -192,8 +190,8 @@ async def stream_message_turn(
                     )
 
             # Emit suggestions event before done (if any)
-            if suggestions:
-                yield _sse("suggestions", suggestions)
+            if result.suggestions:
+                yield _sse("suggestions", result.suggestions)
 
             yield _sse("done", {"assistant_text": full})
         except asyncio.TimeoutError:

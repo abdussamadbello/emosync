@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import AsyncIterator
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -82,3 +83,25 @@ async def anchor_node(state: AgentState) -> dict[str, Any]:
         final_response = passthrough
 
     return {"final_response": final_response}
+
+
+async def stream_anchor(state: AgentState) -> AsyncIterator[str]:
+    """Stream the Anchor's response token-by-token.
+
+    Used by the SSE endpoint for true real-time streaming.  Falls back to
+    yielding the complete Specialist response if the LLM call fails.
+    """
+    llm = get_anchor_llm()
+    prompt = _build_anchor_prompt(state)
+    messages = [SystemMessage(content=ANCHOR_SYSTEM), HumanMessage(content=prompt)]
+
+    passthrough = state.get("specialist_response", "")
+
+    try:
+        async for chunk in llm.astream(messages):
+            token = chunk.content
+            if token:
+                yield token
+    except Exception:
+        logger.exception("Anchor streaming failed; yielding Specialist response.")
+        yield passthrough

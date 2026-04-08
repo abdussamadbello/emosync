@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -243,23 +242,13 @@ async def historian_node(state: AgentState) -> dict[str, Any]:
             "journal_insights": "Context unavailable.",
         }
 
-    # Flag fresh assessments so the Specialist knows to generate a plan.
-    assessment_ctx = phq9 or {}
-    if assessment_ctx.get("created_at"):
-        try:
-            created = datetime.fromisoformat(assessment_ctx["created_at"])
-            if created > datetime.now(timezone.utc) - timedelta(minutes=10):
-                assessment_ctx["just_completed"] = True
-        except (ValueError, TypeError):
-            pass
-
     return {
         "calendar_context": calendar_context,
         "journal_context": journal_context,
         "cbt_chunks": query_chunks,
         "historian_briefing": briefing,
         "user_profile": profile or {},
-        "assessment_context": assessment_ctx,
+        "assessment_context": phq9 or {},
         "treatment_plan": plan or {},
         "recent_moods": moods or [],
     }
