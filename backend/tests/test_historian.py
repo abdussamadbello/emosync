@@ -1,14 +1,23 @@
-import asyncio
-from datetime import datetime
+import pytest
 
 from app.agent.nodes.historian import historian_node
 from app.agent.state import AgentState
 
 
+@pytest.mark.asyncio
+async def test_historian(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _FakeLLM:
+        async def ainvoke(self, _messages):  # noqa: ANN001
+            class _R:
+                content = '{"date_insights": "Test dates", "journal_insights": "Test journal"}'
 
+            return _R()
 
+    monkeypatch.setattr(
+        "app.agent.nodes.historian.get_historian_llm",
+        lambda: _FakeLLM(),
+    )
 
-async def test_historian():
     # Mocked agent state with Calendar + Journal + user message
     state = AgentState({
         "user_message": "I want to improve my focus",
@@ -29,14 +38,10 @@ async def test_historian():
     })
 
     result = await historian_node(state)
-    
-    print("=== Historian Node Output ===")
-    print("Calendar Context:", result["calendar_context"])
-    print("Journal Context:", result["journal_context"])
-    print("Historian Briefing:", result["historian_briefing"])
-    
-    
-    
 
-if __name__ == "__main__":
-    asyncio.run(test_historian())
+    assert result["calendar_context"] == [
+        "Meeting with mentor at 3 PM",
+        "Project deadline on Friday",
+    ]
+    assert result["historian_briefing"]["date_insights"] == "Test dates"
+    assert result["historian_briefing"]["journal_insights"] == "Test journal"

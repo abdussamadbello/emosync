@@ -1,4 +1,3 @@
-import asyncio
 
 class IngestionPipeline:
     def __init__(self, loader, chunker, embedder, writer, tagger):

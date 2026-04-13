@@ -6,7 +6,6 @@ import uuid
 from typing import Any
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_async_session
 from app.models.journal_entry import JournalEntry
